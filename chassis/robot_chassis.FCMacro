@@ -1,0 +1,355 @@
+# -*- coding: utf-8 -*-
+# =====================================================================
+#  Robot chassis for the AIROST delivery robot  (FreeCAD macro)
+#
+#  HOW TO RUN
+#    1. FreeCAD > Macro > Macros... > Create  (name it robot_chassis)
+#    2. Paste this whole file in, save (Ctrl+S)
+#    3. Macro > Macros... > select robot_chassis > Execute
+#
+#  It makes a new document "RobotChassis" with 6 printable parts and
+#  see-through stand-ins for the parts you buy (wheels, motors, boards...).
+#
+#  To change a size: edit a number in the MEASURE / SETTINGS block below
+#  and run the macro again. Each run makes a fresh document.
+#
+#  Units: millimetres.  X = left/right, Y = forward (+Y is the front),
+#  Z = up.  The floor is at Z = 0.
+# =====================================================================
+
+import FreeCAD as App
+import Part
+from FreeCAD import Vector as V
+
+# ---------------- MEASURE THESE ON YOUR OWN PARTS ----------------
+CASTER_H = 21.0       # ball caster: floor to its mounting plate (mm) - CY-15A type
+WHEEL_D = 65.0        # wheel diameter (mm)
+GEARBOX_W = 18.8      # TT motor gearbox thickness (mm)
+
+# ---------------- SETTINGS ----------------
+DECK_W = 136.0        # lower deck width (wheels sit just outside it)
+TOP_W = 156.0         # top deck width (your mainboard is 150 mm; this deck sits above the wheels)
+DECK_T = 3.0          # deck thickness
+LOW_Y = (-80.0, 110.0)   # lower deck back / front
+TOP_Y = (-70.0, 55.0)    # top deck back / front
+GAP = 37.0            # space between the decks (standoff length)
+M3 = 3.4              # clearance hole for M3 screws
+STANDOFF_XY = [(-56, -64), (56, -64), (-62, 49), (62, 49)]
+
+AXLE_Y = -45.0        # wheel axle, front/back position
+MOTOR_X = 55.0        # gearbox centre, left/right
+CASTER_Y = -12.0
+SENSOR = dict(cx=0.0, cy=68.0, w=90.0, d=73.0, top_z=19.0, inset=3.0)   # your IR sensor board (90 x 73 mm)
+COLOUR_Y = 18.0
+COLOUR_TOP_Z = 15.0
+MAINBOARD = dict(w=150.0, d=90.0, cx=0.0, cy=-9.0, inset=3.0)   # your mainboard (150 x 90 mm)
+
+BALL_D = 40.0
+CAGE_IN_W = 46.0      # inside width of the claw cage
+CAGE_BACK_Y = 107.0
+CAGE_DEPTH = 45.0
+CAGE_WALL = 3.0
+CAGE_BOTTOM_Z = 10.0  # walls stop here, so they pass over the ring
+CAGE_PLATE_Z = 33.0
+SG90 = dict(L=22.8, W=12.2, tab_hole_pitch=27.5, shaft_from_end=5.9)
+SHOW_BOUGHT_PARTS = True
+SHOW_DIMENSIONS = True    # dimension lines in the 3D view (3 groups you can hide)
+# ------------------------------------------------------------------
+
+AXLE_Z = WHEEL_D / 2.0
+LOW_Z = AXLE_Z + 12.0                 # deck sits just above the gearbox
+lz0, lz1 = LOW_Z, LOW_Z + DECK_T
+tz0 = lz1 + GAP
+tz1 = tz0 + DECK_T
+H = DECK_W / 2.0
+
+
+# ---------------- helpers ----------------
+def box(x0, x1, y0, y1, z0, z1):
+    x0, x1 = min(x0, x1), max(x0, x1)
+    y0, y1 = min(y0, y1), max(y0, y1)
+    return Part.makeBox(x1 - x0, y1 - y0, z1 - z0, V(x0, y0, z0))
+
+def cyl_z(x, y, z0, z1, r):
+    return Part.makeCylinder(r, z1 - z0, V(x, y, z0), V(0, 0, 1))
+
+def cyl_x(x0, x1, y, z, r):
+    x0, x1 = min(x0, x1), max(x0, x1)
+    return Part.makeCylinder(r, x1 - x0, V(x0, y, z), V(1, 0, 0))
+
+def cyl_y(x, y0, y1, z, r):
+    return Part.makeCylinder(r, y1 - y0, V(x, y0, z), V(0, 1, 0))
+
+def slot_z(xa, ya, xb, yb, z0, z1, r):
+    """Vertical slot (for screws through a plate). Ends must share x or y."""
+    s = cyl_z(xa, ya, z0, z1, r).fuse(cyl_z(xb, yb, z0, z1, r))
+    if abs(ya - yb) < 1e-6:
+        s = s.fuse(box(xa, xb, ya - r, ya + r, z0, z1))
+    else:
+        s = s.fuse(box(xa - r, xa + r, ya, yb, z0, z1))
+    return s
+
+def slot_x(xa, xb, y0, y1, z, r):
+    """Horizontal slot through a vertical plate, running along Y."""
+    return cyl_x(xa, xb, y0, z, r).fuse(cyl_x(xa, xb, y1, z, r)).fuse(box(xa, xb, y0, y1, z - r, z + r))
+
+def rounded_plate(x0, x1, y0, y1, z0, z1, r=6.0):
+    s = box(x0 + r, x1 - r, y0, y1, z0, z1).fuse(box(x0, x1, y0 + r, y1 - r, z0, z1))
+    for x in (x0 + r, x1 - r):
+        for y in (y0 + r, y1 - r):
+            s = s.fuse(cyl_z(x, y, z0, z1, r))
+    return s
+
+def hex_prism(x, y, z0, z1, across_flats):
+    import math
+    r = across_flats / 2.0 / math.cos(math.radians(30))
+    pts = [V(x + r * math.cos(math.radians(60 * i)), y + r * math.sin(math.radians(60 * i)), z0) for i in range(7)]
+    return Part.Face(Part.makePolygon(pts)).extrude(V(0, 0, z1 - z0))
+
+def gusset(x_plate, x_out, y0, y1, z_low, z_deck):
+    """Triangular brace between a hanging plate and the deck underside."""
+    pts = [V(x_plate, y0, z_low), V(x_plate, y0, z_deck), V(x_out, y0, z_deck), V(x_plate, y0, z_low)]
+    return Part.Face(Part.makePolygon(pts)).extrude(V(0, y1 - y0, 0))
+
+def fuse_all(shapes):
+    s = shapes[0]
+    if len(shapes) > 1:
+        s = s.fuse(shapes[1:])
+    return s.removeSplitter()
+
+def cut_all(base, cuts):
+    return base.cut(cuts[0].fuse(cuts[1:]) if len(cuts) > 1 else cuts[0]).removeSplitter()
+
+
+# ======================= LOWER DECK =======================
+low = [rounded_plate(-H, H, LOW_Y[0], LOW_Y[1], lz0, lz1)]
+cuts = [cyl_z(x, y, lz0 - 1, lz1 + 1, M3 / 2) for x, y in STANDOFF_XY]
+
+for s in (-1, 1):
+    inner = s * (MOTOR_X - GEARBOX_W / 2)       # inner face of the gearbox
+    outer_plate = inner - s * 4.0                # 4 mm bracket plate
+    low.append(box(inner, outer_plate, AXLE_Y - 16, AXLE_Y + 25, AXLE_Z - 12, lz0 + 0.01))
+    low.append(gusset(outer_plate, outer_plate - s * 8.0, AXLE_Y + 21, AXLE_Y + 25, AXLE_Z - 4, lz0 + 0.01))
+    low.append(gusset(outer_plate, outer_plate - s * 8.0, AXLE_Y - 16, AXLE_Y - 12, AXLE_Z - 4, lz0 + 0.01))
+    # long slot at axle height, along the whole gearbox: the TT motor's two screws go
+    # through its gearbox and into this slot wherever its holes are
+    cuts.append(slot_x(inner + s, outer_plate - s, AXLE_Y - 8, AXLE_Y + 22, AXLE_Z, M3 / 2))
+    cuts.append(cyl_x(inner + s, outer_plate - s, AXLE_Y, AXLE_Z, 4.5))    # room for the inner shaft stub
+    # cable-tie slots either side of the gearbox
+    for yy in (AXLE_Y + 2, AXLE_Y + 24):
+        for xx in (s * (MOTOR_X - GEARBOX_W / 2 - 7), s * (MOTOR_X + GEARBOX_W / 2 + 3)):
+            cuts.append(box(xx - 1.5, xx + 1.5, yy - 2.5, yy + 2.5, lz0 - 1, lz1 + 1))
+    cuts.append(slot_z(s * 32, -30, s * 32, -18, lz0 - 1, lz1 + 1, 4))     # motor wire hole
+    # wheel notch so the wheel does not rub the deck edge
+    cuts.append(box(s * 63.5, s * 80, AXLE_Y - 36, AXLE_Y + 36, lz0 - 1, lz1 + 1))
+    # caster slots (fit hole spacing 16-44 mm)
+    cuts.append(slot_z(s * 8, CASTER_Y, s * 22, CASTER_Y, lz0 - 1, lz1 + 1, M3 / 2))
+    # colour sensor slots (fit hole spacing 12-22 mm)
+    cuts.append(slot_z(s * 6, COLOUR_Y, s * 11, COLOUR_Y, lz0 - 1, lz1 + 1, 1.6))
+    # battery strap slots
+    for yc in (-56, 4):
+        cuts.append(box(s * 40 - 1.5, s * 40 + 1.5, yc - 6, yc + 6, lz0 - 1, lz1 + 1))
+
+sb = SENSOR
+sb_holes = [(sb["cx"] + sx * (sb["w"] / 2 - sb["inset"]), sb["cy"] + sy * (sb["d"] / 2 - sb["inset"]))
+            for sx in (-1, 1) for sy in (-1, 1)]
+cuts += [cyl_z(x, y, lz0 - 1, lz1 + 1, M3 / 2) for x, y in sb_holes]
+CAGE_SCREWS = [(-12, 95), (12, 95)]
+cuts += [cyl_z(x, y, lz0 - 1, lz1 + 1, M3 / 2) for x, y in CAGE_SCREWS]
+cuts.append(slot_z(-6, 52, 6, 52, lz0 - 1, lz1 + 1, 7))                   # front wire hole
+lower_deck = cut_all(fuse_all(low), cuts)
+
+# ======================= TOP DECK =======================
+top = rounded_plate(-TOP_W / 2, TOP_W / 2, TOP_Y[0], TOP_Y[1], tz0, tz1)
+cuts = [cyl_z(x, y, tz0 - 1, tz1 + 1, M3 / 2) for x, y in STANDOFF_XY]
+mb = MAINBOARD
+mb_holes = [(mb["cx"] + sx * (mb["w"] / 2 - mb["inset"]), mb["cy"] + sy * (mb["d"] / 2 - mb["inset"]))
+            for sx in (-1, 1) for sy in (-1, 1)]
+cuts += [cyl_z(x, y, tz0 - 1, tz1 + 1, M3 / 2) for x, y in mb_holes]
+cuts.append(slot_z(-8, 43, 8, 43, tz0 - 1, tz1 + 1, 7))                   # front wire hole
+cuts.append(slot_z(-14, -62, 14, -62, tz0 - 1, tz1 + 1, 4))               # rear wire slot
+cuts.append(rounded_plate(-52, -8, -40, 20, tz0 - 1, tz1 + 1, 5))         # windows under the mainboard
+cuts.append(rounded_plate(8, 52, -40, 20, tz0 - 1, tz1 + 1, 5))
+top_deck = cut_all(top, cuts)
+
+# ======================= CLAW CAGE =======================
+iw = CAGE_IN_W / 2
+front = CAGE_BACK_Y + CAGE_WALL + CAGE_DEPTH
+pz0, pz1 = CAGE_PLATE_Z, CAGE_PLATE_Z + 3
+sv = SG90
+shaft_x = -iw - CAGE_WALL - 0.6 - sv["W"] / 2
+shaft_y = front + 5
+body_y1 = shaft_y + sv["shaft_from_end"]
+body_y0 = body_y1 - sv["L"]
+body_cy = (body_y0 + body_y1) / 2
+cage = fuse_all([
+    box(-iw - CAGE_WALL, -iw, CAGE_BACK_Y, front, CAGE_BOTTOM_Z, pz1),            # left wall
+    box(iw, iw + CAGE_WALL, CAGE_BACK_Y, front, CAGE_BOTTOM_Z, pz1),              # right wall
+    box(-iw - CAGE_WALL, iw + CAGE_WALL, CAGE_BACK_Y, CAGE_BACK_Y + CAGE_WALL, CAGE_BOTTOM_Z, pz1),  # back wall
+    box(-iw - CAGE_WALL, iw + CAGE_WALL, 85, front, pz0, pz1),                    # top plate
+    box(shaft_x - sv["W"] / 2 - 5, -iw, body_cy - 19, body_cy + 19, pz0, pz1),   # servo pad
+    box(-20, 20, 85, CAGE_BACK_Y + CAGE_WALL, pz1 - 0.01, lz0),                   # riser up to the deck
+])
+cuts = [
+    box(shaft_x - sv["W"] / 2 - 0.3, shaft_x + sv["W"] / 2 + 0.3, body_y0 - 0.3, body_y1 + 0.3, pz0 - 1, pz1 + 1),
+    cyl_z(shaft_x, body_cy - sv["tab_hole_pitch"] / 2, pz0 - 1, pz1 + 1, 1.0),
+    cyl_z(shaft_x, body_cy + sv["tab_hole_pitch"] / 2, pz0 - 1, pz1 + 1, 1.0),
+    rounded_plate(-iw + 4, iw - 4, CAGE_BACK_Y + CAGE_WALL + 2, front + 10, pz0 - 1, pz1 + 1, 4),  # open slot: lets the ball top pass in
+]
+for x, y in CAGE_SCREWS:
+    cuts.append(cyl_z(x, y, pz0 - 1, lz0 + 1, M3 / 2))
+    cuts.append(hex_prism(x, y, pz0 - 1, pz0 + 3, 5.8))    # M3 nut pocket, from below
+claw_cage = cut_all(cage, cuts)
+
+# ======================= GATE ARM =======================
+arm_len = 2 * iw + CAGE_WALL + (-iw - CAGE_WALL - shaft_x) + 6
+arm_z = pz0 - 9
+gate = fuse_all([
+    cyl_z(shaft_x, shaft_y, arm_z - 3, arm_z, 5.5),
+    box(shaft_x, shaft_x + arm_len, shaft_y - 4, shaft_y + 4, arm_z - 3, arm_z),
+    box(shaft_x + 18, shaft_x + arm_len, shaft_y - 1.5, shaft_y + 1.5, arm_z - 8, arm_z),  # pushes the ball at mid height
+])
+cuts = [cyl_z(shaft_x, shaft_y, arm_z - 4, arm_z + 1, 2.6)]
+cuts += [cyl_z(shaft_x + d, shaft_y, arm_z - 4, arm_z + 1, 0.8) for d in (7, 10.5, 14)]  # horn screw holes
+gate_arm = cut_all(gate, cuts)
+
+# ======================= SPACERS =======================
+def tube(x, y, z0, z1, od=7.0, idd=M3):
+    return cyl_z(x, y, z0, z1, od / 2).cut(cyl_z(x, y, z0 - 1, z1 + 1, idd / 2))
+
+spacer_list = [tube(x, y, lz1, tz0) for x, y in STANDOFF_XY]                     # 4 x deck standoffs
+spacer_list += [tube(x, y, sb["top_z"], lz0, od=6.0) for x, y in sb_holes]       # 4 x sensor board
+spacer_list += [tube(s * 9, COLOUR_Y, COLOUR_TOP_Z, lz0, od=5.0, idd=2.6) for s in (-1, 1)]  # 2 x colour sensor
+spacers = Part.makeCompound(spacer_list)
+
+# ======================= CASTER SPACER =======================
+caster_spacer = cut_all(rounded_plate(-26, 26, CASTER_Y - 12, CASTER_Y + 12, CASTER_H, LOW_Z, 4),
+                        [slot_z(s * 8, CASTER_Y, s * 22, CASTER_Y, CASTER_H - 1, LOW_Z + 1, M3 / 2) for s in (-1, 1)])
+
+# ======================= DOCUMENT =======================
+doc = App.newDocument("RobotChassis")
+printed = doc.addObject("App::DocumentObjectGroup", "Printed_parts")
+PARTS = [
+    ("Lower_deck", lower_deck, (0.25, 0.50, 0.82)),
+    ("Top_deck", top_deck, (0.18, 0.62, 0.45)),
+    ("Claw_cage", claw_cage, (0.83, 0.34, 0.10)),
+    ("Gate_arm", gate_arm, (0.88, 0.63, 0.13)),
+    ("Spacers", spacers, (0.54, 0.56, 0.60)),
+    ("Caster_spacer", caster_spacer, (0.61, 0.42, 0.82)),
+]
+for name, shape, colour in PARTS:
+    obj = doc.addObject("Part::Feature", name)
+    obj.Shape = shape
+    printed.addObject(obj)
+    if App.GuiUp:
+        obj.ViewObject.ShapeColor = colour
+
+if SHOW_BOUGHT_PARTS:
+    bought = doc.addObject("App::DocumentObjectGroup", "Bought_parts_for_reference")
+    ref = []
+    for s in (-1, 1):
+        ref.append(("Wheel", cyl_x(s * 67, s * 93, AXLE_Y, AXLE_Z, WHEEL_D / 2)))
+        ref.append(("TT_gearbox", box(s * (MOTOR_X - GEARBOX_W / 2), s * (MOTOR_X + GEARBOX_W / 2),
+                                      AXLE_Y - 11, AXLE_Y + 26, AXLE_Z - 11.2, AXLE_Z + 11.2)))
+        ref.append(("TT_motor", cyl_y(s * MOTOR_X, AXLE_Y + 26, AXLE_Y + 46, AXLE_Z, 10.5)))
+    ref += [
+        ("IR_sensor_board", box(-sb["w"] / 2, sb["w"] / 2, sb["cy"] - sb["d"] / 2, sb["cy"] + sb["d"] / 2, sb["top_z"] - 4, sb["top_z"])),
+        ("Colour_sensor", box(-10, 10, COLOUR_Y - 10, COLOUR_Y + 10, COLOUR_TOP_Z - 2, COLOUR_TOP_Z)),
+        ("Ball_caster", cyl_z(0, CASTER_Y, 0, CASTER_H, 16).fuse(box(-25, 25, CASTER_Y - 13, CASTER_Y + 13, CASTER_H - 1.5, CASTER_H))),
+        ("Ping_pong_ball", Part.makeSphere(BALL_D / 2, V(0, (CAGE_BACK_Y + CAGE_WALL + front) / 2, BALL_D / 2))),
+        ("SG90_servo", box(shaft_x - sv["W"] / 2, shaft_x + sv["W"] / 2, body_y0, body_y1, pz1 - 6.5, pz1 + 16)),
+        ("Battery_2", box(-39, 39, -76, -36, lz1, lz1 + 20)),
+        ("Battery_1", box(-29.5, 29.5, -30, 38, lz1, lz1 + 16)),
+        ("Your_mainboard", box(-mb["w"] / 2, mb["w"] / 2, mb["cy"] - mb["d"] / 2, mb["cy"] + mb["d"] / 2, tz1, tz1 + 1.6)),
+    ]
+    for name, shape in ref:
+        obj = doc.addObject("Part::Feature", name)
+        obj.Shape = shape
+        bought.addObject(obj)
+        if App.GuiUp:
+            obj.ViewObject.Transparency = 70
+            obj.ViewObject.ShapeColor = (0.6, 0.6, 0.6)
+
+
+# ======================= DIMENSIONS =======================
+DIM_LIST = []   # (group, label, p1, p2, dimension-line point, normal, direction or None)
+if SHOW_DIMENSIONS:
+    up, down, side = V(0, 0, 1), V(0, 0, -1), V(1, 0, 0)
+    X, Y, Z = V(1, 0, 0), V(0, 1, 0), V(0, 0, 1)
+    tH = TOP_W / 2
+    # --- overall sizes (look from the Top view: press 2) ---
+    DIM_LIST += [
+        ("Dim_overall", "Lower deck width", V(-H, LOW_Y[1], lz1), V(H, LOW_Y[1], lz1), V(0, LOW_Y[1] + 12, lz1), up, X),
+        ("Dim_overall", "Lower deck length", V(-H, LOW_Y[0], lz1), V(-H, LOW_Y[1], lz1), V(-H - 40, 0, lz1), up, Y),
+        ("Dim_overall", "Top deck width", V(-tH, TOP_Y[0], tz1), V(tH, TOP_Y[0], tz1), V(0, TOP_Y[0] - 18, tz1), up, X),
+        ("Dim_overall", "Top deck length", V(tH, TOP_Y[0], tz1), V(tH, TOP_Y[1], tz1), V(tH + 14, 0, tz1), up, Y),
+    ]
+    # --- heights (look from the Right view: press 3) ---
+    DIM_LIST += [
+        ("Dim_heights", "Floor to lower deck", V(H, LOW_Y[0], 0), V(H, LOW_Y[0], lz0), V(H, LOW_Y[0] - 20, 0), side, Z),
+        ("Dim_heights", "Gap between decks", V(H, TOP_Y[0], lz1), V(H, TOP_Y[0], tz0), V(H, LOW_Y[0] - 20, 0), side, Z),
+        ("Dim_heights", "Floor to top of top deck", V(H, TOP_Y[1], 0), V(H, TOP_Y[1], tz1), V(H, TOP_Y[1] + 25, 0), side, Z),
+        ("Dim_heights", "Wheel axle height", V(H, AXLE_Y, 0), V(H, AXLE_Y, AXLE_Z), V(H, AXLE_Y + 40, 0), side, Z),
+        ("Dim_heights", "Cage walls above floor", V(iw + CAGE_WALL, front, 0), V(iw + CAGE_WALL, front, CAGE_BOTTOM_Z), V(iw + CAGE_WALL, front + 14, 0), side, Z),
+        ("Dim_heights", "Cage top plate height", V(iw + CAGE_WALL, front, 0), V(iw + CAGE_WALL, front, CAGE_PLATE_Z), V(iw + CAGE_WALL, front + 26, 0), side, Z),
+    ]
+    # --- hole spacings ---
+    sx_r, sy_r = STANDOFF_XY[1]
+    sx_f, sy_f = STANDOFF_XY[3]
+    mbx = mb["w"] / 2 - mb["inset"]; mby0 = mb["cy"] - (mb["d"] / 2 - mb["inset"]); mby1 = mb["cy"] + (mb["d"] / 2 - mb["inset"])
+    sbx = sb["w"] / 2 - sb["inset"]; sby0 = sb["cy"] - (sb["d"] / 2 - sb["inset"]); sby1 = sb["cy"] + (sb["d"] / 2 - sb["inset"])
+    DIM_LIST += [
+        ("Dim_holes", "Rear standoff holes", V(-sx_r, sy_r, tz1), V(sx_r, sy_r, tz1), V(0, sy_r - 9, tz1), up, X),
+        ("Dim_holes", "Front standoff holes", V(-sx_f, sy_f, tz1), V(sx_f, sy_f, tz1), V(0, sy_f + 9, tz1), up, X),
+        ("Dim_holes", "Standoff holes front-back", V(sx_f, sy_r, tz1), V(sx_f, sy_f, tz1), V(sx_f - 10, 0, tz1), up, Y),
+        ("Dim_holes", "Mainboard holes, width", V(-mbx, mby0, tz1), V(mbx, mby0, tz1), V(0, mby0 + 8, tz1), up, X),
+        ("Dim_holes", "Mainboard holes, depth", V(-mbx, mby0, tz1), V(-mbx, mby1, tz1), V(-mbx + 8, 0, tz1), up, Y),
+        ("Dim_holes", "Sensor board holes, width", V(-sbx, sby0, lz0), V(sbx, sby0, lz0), V(0, sby0 - 8, lz0), down, X),
+        ("Dim_holes", "Sensor board holes, depth", V(sbx, sby0, lz0), V(sbx, sby1, lz0), V(sbx + 9, 0, lz0), down, Y),
+        ("Dim_holes", "Caster holes (CY-15A)", V(-20, CASTER_Y, lz0), V(20, CASTER_Y, lz0), V(0, CASTER_Y - 16, lz0), down, X),
+        ("Dim_holes", "Cage inside width", V(-iw, front, pz1), V(iw, front, pz1), V(0, front + 12, pz1), up, X),
+        ("Dim_holes", "Cage inside depth", V(iw, CAGE_BACK_Y + CAGE_WALL, pz1), V(iw, front, pz1), V(iw + 14, 0, pz1), up, Y),
+    ]
+    try:
+        import Draft
+        make_dim = getattr(Draft, "make_linear_dimension", None) or Draft.makeDimension
+        groups = {}
+        for gname, label, p1, p2, pl, normal, direction in DIM_LIST:
+            if gname not in groups:
+                groups[gname] = doc.addObject("App::DocumentObjectGroup", gname)
+            d = make_dim(p1, p2, pl)
+            d.Label = label
+            d.Normal = normal
+            if direction is not None:
+                d.Direction = direction
+            groups[gname].addObject(d)
+            if App.GuiUp:
+                try:
+                    vo = d.ViewObject
+                    vo.FontSize = 5
+                    vo.ArrowSize = 1.5
+                    vo.ArrowType = "Arrow"
+                    vo.Decimals = 1
+                    vo.ShowUnit = True
+                    vo.LineColor = (0.10, 0.10, 0.12)
+                    vo.TextColor = (0.10, 0.10, 0.12)
+                except Exception:
+                    pass
+    except Exception as e:
+        App.Console.PrintWarning("Dimensions skipped: %s\n" % e)
+
+doc.recompute()
+if App.GuiUp:
+    import FreeCADGui as Gui
+    Gui.SendMsgToActiveView("ViewFit")
+    Gui.activeDocument().activeView().viewIsometric()
+
+for name, shape, _ in PARTS:
+    bb = shape.BoundBox
+    App.Console.PrintMessage("%-14s %5.1f x %5.1f x %5.1f mm  valid=%s\n" % (name, bb.XLength, bb.YLength, bb.ZLength, shape.isValid()))
+App.Console.PrintMessage("\nKEY SIZES (mm)\n")
+for _g, label, p1, p2, _pl, _n, direction in DIM_LIST:
+    d = p2.sub(p1)
+    val = abs(d.dot(direction)) if direction is not None else d.Length
+    App.Console.PrintMessage("  %-28s %6.1f\n" % (label, val))
+App.Console.PrintMessage("Done. Export each part: select it > File > Export > STL.\n")

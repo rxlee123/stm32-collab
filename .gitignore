@@ -1,0 +1,15 @@
+# STM32CubeIDE build output and workspace files
+Debug/
+Release/
+.metadata/
+*.o
+*.d
+*.su
+*.elf
+*.map
+*.list
+*.hex
+*.bin
+# host test binaries
+firmware/test/run
+firmware/test/run_route
