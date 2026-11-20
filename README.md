@@ -41,22 +41,24 @@ Each sensor's voltage is compared with a preset knob by the LM324, which gives t
 
 All tuning numbers live in [`firmware/Core/Inc/robot_config.h`](firmware/Core/Inc/robot_config.h). The values here are starting points; keep your tuned values in this file.
 
-## Status (19 Nov 2026)
+## Status (21 Nov 2026)
 
 | Part | Status |
 |---|---|
-| Sensor board + LM324 (4 channels) | Working, LEDs light on **white** (`SENSOR_BLACK_LEVEL 0`) |
-| Buttons, LEDs, serial monitor | Working (PA6/PA7 internal pull-down) |
-| Motors + L293D | Working, left wheel trimmed to 90 % |
-| Line following | Being tuned on a test track (speed, dashed lines, junctions) |
-| Route list for the real field | To do on the practice field |
-| Phone control (MANUAL) | To test |
+| Sensor board + LM324 | Working. Order left to right A12, A15, B3, B4. Far-right preset re-set 21 Nov |
+| Buttons, LEDs, serial monitor | Working |
+| Motors + L293D | Working, `MOTOR_MIN` 300 so slow wheels don't stall |
+| Line following, corners, dashed line | **Working on the test track** (robot.c v3.8) |
+| Bluetooth debug to Serial Studio | Working |
+| Phone control (Dabble joystick, iPhone) | Working |
+| Map 1 route list | Draft in `robot_config.h`; junction counts to check on the real field |
+| Cube pickup / Box B drop | Written and PC-tested, not yet tried on the robot |
 
 ## Tests
 
-The logic can be checked on a PC without the robot (steering, gaps, junctions, white-line mode, finish stop, Bluetooth, start-up safety):
+The logic can be checked on a PC without the robot (steering, gaps, corners, junctions, route words, white-line mode, cube/box steps, Bluetooth, motor power, start-up safety):
 
 ```
 cd firmware
-gcc -std=c99 -Itest -ICore/Inc test/test.c Core/Src/robot.c -o test/run && ./test/run
+sh test/run_tests.sh
 ```

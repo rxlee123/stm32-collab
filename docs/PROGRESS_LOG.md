@@ -9,12 +9,12 @@
 | Firmware | Wrote robot.c (AUTO, MANUAL, SENSOR TEST, MOTOR TEST) with PC tests and an ARM build check |
 | Buttons | Only worked with the meter attached → CubeMX Pull-down on PA6/PA7, and uploading the newest .elf |
 | Motors | MOTOR TEST passes. Left wheel stronger → `LEFT_TRIM 90` |
-| Now | Tuning on a test track: sensor height, speed, dashed lines (`GAP_MS 400`), junctions |
+| 19-20 Nov | Bluetooth debug to Serial Studio; Dabble joystick (iPhone); map 1 route words (INVERT, BLIND, OPEN, PICKUP, DROP) |
+| 20 Nov | Fixed swapped sensors (A12 is far left); start box seeking; blue zones read as white |
+| 21 Nov | Inner wheel stalled in turns -> `MOTOR_MIN`; corners overshot as "gaps" -> corner memory; steering kept in WIDE; auto colour swap off; soft start; far-right preset re-set. **Line following + corners + dashed line work** |
 
 ## Next steps
-1. Fix sensor height (6–8 mm) and set the 4 presets.
-2. Tune `BASE_SPEED`, `KP`, `KD` on a test track with curves and a dashed section.
-3. Map the practice field's junctions into `ROUTE_LIST`.
-4. Set the servo open/closed values; test carrying the cube.
-5. Test MANUAL mode with the phone and the Blue Bee.
-6. AIROST: add a TCS34725 colour sensor on PB6/PB7 (I2C1).
+1. Measure `SPEED_MM_S` (time 1 m at BASE_SPEED) and `SPIN180_MS`.
+2. Map 1: count junctions by hand in SENSOR TEST, fix the `corner?` lines in `ROUTE_LIST`.
+3. Test `R_PICKUP` / `R_DROP` with the real cube and gate.
+4. AIROST: add a TCS34725 colour sensor on PB6/PB7 (I2C1).

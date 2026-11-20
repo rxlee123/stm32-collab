@@ -28,6 +28,9 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, GPIO_PinState s);
 int HAL_TIM_PWM_Start(TIM_HandleTypeDef *h, uint32_t ch);
 int HAL_UART_Transmit(UART_HandleTypeDef *h, uint8_t *d, uint16_t n, uint32_t t);
 int HAL_UART_Receive_IT(UART_HandleTypeDef *h, uint8_t *d, uint16_t n);
+int HAL_UART_Transmit_IT(UART_HandleTypeDef *h, const uint8_t *d, uint16_t n);
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *h);
+#define HAL_OK 0
 uint32_t HAL_GetTick(void);
 void HAL_Delay(uint32_t ms);
 #endif
