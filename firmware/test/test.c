@@ -119,7 +119,13 @@ int main(void){
   set_black(0x0); run(30);
   CHECK(left()>0 && right()<0, "line left from the right side: spins right AT ONCE, no straight run");
   set_black(0x6); run(20);
+  CHECK(left()<right(), "found again in the middle while spinning right: short counter-steer brakes the spin (KD)");
+  run(D_MS + 10);
   CHECK(left()>0 && right()>0, "found again: following");
+  { set_black(0x6); run(300); log_txt[0]=0;
+    set_black(0xE); run(40); set_black(0x6); run(20); set_black(0x0); run(30);   /* your log 21 Nov: wide, 0110, gone */
+    CHECK(strstr(log_txt,"BEND right")!=NULL && left()>0 && right()<0,
+          "corner: 0111, then centred 0110 for a moment, then gone -> BEND right (not GAP)"); }
   printf("Junction vs colour change:\n");
   set_black(0xF); run(60); set_black(0x6); run(20);
   int j=0; { char*p=strstr(log_txt,"junc="); (void)p; }

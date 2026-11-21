@@ -69,6 +69,10 @@ int main(void){
   press(GPIO_PIN_6); run(2000);
   CHECK(WIDE_TO_INVERT_MS || !inverted_for_test(), "0 = off: a long black area does NOT switch to white-line mode");
   CHECK(log_toolong && htim2.ccr[1]==0 && htim2.ccr[4]==0, "all black for 2 s: robot stops, LOST (WIDE_MAX_MS safety)");
+  log_toolong = 0;
+  inA|=GPIO_PIN_12;                                            /* 0111: far-left white, other 3 black (diamond top log) */
+  press(GPIO_PIN_6); run(2500);                                /* START again, sit on 0111 for 2.5 s */
+  CHECK(!log_toolong && (htim2.ccr[1] || htim2.ccr[4]), "0111 for 2.5 s (top of the diamond): NO safety stop, keeps driving");
   printf("\n%s (%d failed)\n", fails? "SOME TESTS FAILED":"ALL TESTS PASSED", fails);
   return fails;
 }

@@ -63,6 +63,9 @@
 #ifndef JUNCTION_GAP_MS
 #define JUNCTION_GAP_MS     150
 #endif
+#ifndef D_MS
+#define D_MS                 80
+#endif
 #ifndef BT_DEBUG
 #define BT_DEBUG              2
 #endif
@@ -132,7 +135,9 @@ static uint8_t  was_lost;
 static uint8_t  seen_line;           /* 0 = seeking: drive straight to the next line (start box, after a blind part) */
 static uint32_t last_junc_t;         /* when the last junction was counted */
 static uint8_t  wide_nocount;
+static uint32_t wide_all_t;          /* WIDE: last time NOT all 4 sensors were black (safety stop) */
 static uint32_t line_seen_t;         /* seeking: when the line was first seen (0 = not yet) */
+static uint32_t wide_seen_t;         /* last time 3+ sensors saw the line (a corner or junction) */
 static uint32_t left_seen_t, right_seen_t;   /* last time the far-left / far-right sensor saw the line */
 static int8_t   exit_side;           /* where the line went when it vanished: -1 left, 0 middle, +1 right */        /* this wide patch belongs to the junction just counted */
 static uint8_t  seq_phase;           /* step inside PICKUP / DROP */
@@ -353,8 +358,12 @@ int Robot_LineError(uint8_t bits, int last)
 /* ------------------------------------------------------------------ */
 static void auto_enter(AutoState s, uint32_t now) { astate = s; state_t0 = now; }
 
-static void follow_pd(void)
+static int      d_hold;              /* damping: the last change of the line position ... */
+static uint32_t d_t;                 /* ... and when it happened                         */
+
+static void follow_pd(uint8_t damp)   /* damp 0: no damping (WIDE: 3+ sensors, the position is not real) */
 {
+    static uint8_t after_wide;
     if (error <= -30 || error >= 30) {          /* only an OUTER sensor sees the line: sharp bend */
         int side = error < 0 ? -1 : 1;          /* pivot: outer wheel forward, inner wheel back */
         drive(side > 0 ? SHARP_OUTER : -SHARP_INNER, side > 0 ? -SHARP_INNER : SHARP_OUTER);
@@ -365,7 +374,16 @@ static void follow_pd(void)
         drive(side > 0 ? TURN_FWD : -TURN_BACK, side > 0 ? -TURN_BACK : TURN_FWD);
         return;
     }
-    int d = error - last_error;
+    /* Damping (the D in PD): brake the swing when the line moves across the sensors.
+     * Old code used "error - last_error": non-zero for ONE 2 ms loop only, far too short
+     * for the motors, so KD did almost nothing and the robot swung from side to side.
+     * Now the last change is kept for D_MS, long enough for the wheels to react.         */
+    uint32_t now = HAL_GetTick();
+    if (!damp || after_wide) {                   /* in WIDE, and the first reading after it: */
+        after_wide = !damp;                      /* no damping (the 3-sensor position is fake) */
+        d_t = now - D_MS;
+    } else if (error != last_error) { d_hold = error - last_error; d_t = now; }
+    int d = (D_MS && now - d_t < D_MS) ? d_hold : 0;
     int corr = (KP * error + KD * d) / 10;      /* error is x10, so divide back */
     int a = error < 0 ? -error : error;
     int base = BASE_SPEED - a * CORNER_SLOW / 10;   /* slow down in bends so it can turn in time */
@@ -448,7 +466,10 @@ static void auto_step(uint32_t now)
     /* corner memory: when did a FAR sensor last see the line (in every state, junctions too) */
     if (line_bits & 1) left_seen_t = now;
     if (line_bits & 8) right_seen_t = now;
-    if (line_bits == 0x6) left_seen_t = right_seen_t = now - 10000;   /* centred again: forget it */
+    if (n >= 3) wide_seen_t = now;
+    /* centred again: forget it. But NOT just after a 3-sensor patch: at a corner the line
+     * can be centred for a moment before it vanishes, and the side must be remembered. */
+    if (line_bits == 0x6 && now - wide_seen_t > BEND_MEMORY_MS) left_seen_t = right_seen_t = now - 10000;
 
     switch (astate) {
     case AS_IDLE: case AS_LOST: case AS_FINISHED:
@@ -466,6 +487,7 @@ static void auto_step(uint32_t now)
             wide_nocount = (now - last_junc_t < JUNCTION_GAP_MS);   /* same junction again: don't count twice */
             if (!wide_nocount && act_is_instant(next_step().act)) { start_junction_action(now); return; }
             auto_enter(AS_WIDE, now);
+            wide_all_t = now;
             drive(BASE_SPEED, BASE_SPEED);
             return;
         }
@@ -532,16 +554,17 @@ static void auto_step(uint32_t now)
         if (error <= -20)     last_side = -1;   /* remember only a CLEAR side,           */
         else if (error >= 20) last_side = 1;    /* not small wobbles on a straight line  */
         else if (error == 0)  last_side = 0;
-        follow_pd();
+        follow_pd(1);
         last_error = error;
         return;
 
     case AS_WIDE:
+        if (line_bits != 0xF) wide_all_t = now;     /* safety timer counts only while ALL 4 see black */
         if (n >= 3) {
             /* keep steering while on the wide patch (a line under 3 sensors when slightly
              * off-centre must still be followed); a full crossing (1111) steers straight */
             error = Robot_LineError(line_bits, error);
-            follow_pd();
+            follow_pd(0);
             last_error = error;
             if (invert_ms && now - state_t0 >= invert_ms) {   /* long wide area = colour swap (0 = off) */
                 inverted ^= 1;
@@ -549,7 +572,7 @@ static void auto_step(uint32_t now)
                                      : "Background is WHITE again: following the BLACK line\r\n");
                 last_error = error = 0;
                 auto_enter(AS_FOLLOW, now);
-            } else if (now - state_t0 >= WIDE_MAX_MS && (!invert_ms || WIDE_MAX_MS > invert_ms)) {
+            } else if (line_bits == 0xF && now - wide_all_t >= WIDE_MAX_MS && (!invert_ms || WIDE_MAX_MS > invert_ms)) {
                 brake(); auto_enter(AS_LOST, now);      /* safety: all black far too long (off the track?) */
                 debug_print("LOST: all sensors black too long (off the track?), press START to try again\r\n");
             }
@@ -619,7 +642,7 @@ static void auto_start(uint32_t now)
 {
     was_lost = 0;
     seen_line = (Robot_LineCount(line_bits) > 0);   /* already on a line (e.g. a retry)? */
-    left_seen_t = right_seen_t = now - 10000;        /* forget old corners */
+    left_seen_t = right_seen_t = wide_seen_t = now - 10000;   /* forget old corners */
     last_junc_t = now - JUNCTION_GAP_MS;
     ramp_t0 = now; ramp_on = (ramp_ms > 0);
     last_error = error = 0;
@@ -915,7 +938,7 @@ void Robot_Init(void)
         bt_write(hello, sizeof hello);
     }
     leds(1, 1, 1); HAL_Delay(300); leds(0, 0, 0);       /* "I'm alive" flash */
-    debug_print("\r\nAutocar ready v3.8p (pivot turn). MODE button = change mode, START = go/stop, hold START = reset route\r\n");
+    debug_print("\r\nAutocar ready v3.8s (corner after a wide patch). MODE button = change mode, START = go/stop, hold START = reset route\r\n");
     loop_t = HAL_GetTick();
 }
 

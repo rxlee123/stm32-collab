@@ -56,7 +56,8 @@
 #define BASE_SPEED           200  /* straight-line speed                         */
 #define MAX_SPEED            999  /* no wheel is ever driven faster than this    */
 #define KP                   90  /* how hard it steers back to the line         */
-#define KD                   250	  /* damping: stops it wobbling left-right       */
+#define KD                   250  /* damping: stops it wobbling left-right. Wobbles: raise. Jerky/twitchy: lower */
+#define D_MS                  80  /* how long the damping acts after the line moves (ms). 0 = no damping */
 #define CORNER_SLOW          60  /* slow BOTH wheels in bends: line 2 sensors off-centre = BASE_SPEED - 200.
                                      Raise if it runs wide on bends, 0 = off */
 #define SEARCH_SPEED         250  /* spin speed while looking for a lost line    */

@@ -13,3 +13,4 @@ Release/
 # host test binaries
 firmware/test/run
 firmware/test/run_route
+firmware/test/run_*
