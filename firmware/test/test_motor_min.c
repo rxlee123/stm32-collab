@@ -44,6 +44,24 @@ int main(void){
   inA|=GPIO_PIN_7; run(80); inA&=~GPIO_PIN_7; run(60);
   inA|=GPIO_PIN_7; run(80); inA&=~GPIO_PIN_7; run(60);
   inA|=GPIO_PIN_7; run(80); inA&=~GPIO_PIN_7; run(60);             /* round to MOTOR TEST again */
+  printf("Pivot turn (TURN_FWD %d / TURN_BACK %d):\n", TURN_FWD, TURN_BACK);
+  run(4000); press(GPIO_PIN_7);                                /* MOTOR TEST -> AUTO */
+  inA|=GPIO_PIN_12|GPIO_PIN_15; inB&=~(GPIO_PIN_3|GPIO_PIN_4);      /* 0011: two right sensors black */
+  inA|=GPIO_PIN_6; run(80); inA&=~GPIO_PIN_6; run(START_RAMP_MS+300);
+  if (TURN_FWD) {
+  CHECK((int)htim2.ccr[4] == lift(TURN_FWD*LEFT_TRIM/100) && (outA & GPIO_PIN_2) &&
+        (int)htim2.ccr[1] == lift(TURN_BACK*RIGHT_TRIM/100) && (outA & GPIO_PIN_5),
+        "0011: left wheel FORWARD (TURN_FWD), right wheel BACKWARDS (TURN_BACK)");
+  } else printf("  skipped 0011: pivot is off (TURN_FWD 0)\n");
+  inA&=~(GPIO_PIN_12|GPIO_PIN_15); inB|=GPIO_PIN_3|GPIO_PIN_4; run(100);   /* 1100: two left sensors black */
+  if (TURN_FWD) {
+  CHECK((int)htim2.ccr[1] == lift(TURN_FWD*RIGHT_TRIM/100) && (outA & GPIO_PIN_4) && (outA & GPIO_PIN_1),
+        "1100: right wheel FORWARD, left wheel BACKWARDS");
+  } else printf("  skipped 1100: pivot is off (TURN_FWD 0)\n");
+  inA|=GPIO_PIN_6; run(80); inA&=~GPIO_PIN_6; run(60);              /* stop */
+  inA|=GPIO_PIN_7; run(80); inA&=~GPIO_PIN_7; run(60);
+  inA|=GPIO_PIN_7; run(80); inA&=~GPIO_PIN_7; run(60);
+  inA|=GPIO_PIN_7; run(80); inA&=~GPIO_PIN_7; run(60);             /* round to MOTOR TEST again */
   printf("WIDE_TO_INVERT_MS = %d:\n", WIDE_TO_INVERT_MS);
   run(4000);                                                   /* let the motor test finish */
   press(GPIO_PIN_7);                                           /* MOTOR TEST -> AUTO */

@@ -39,6 +39,12 @@
 #ifndef SPIN180_MS
 #define SPIN180_MS          900
 #endif
+#ifndef TURN_FWD
+#define TURN_FWD            450
+#endif
+#ifndef TURN_BACK
+#define TURN_BACK           250
+#endif
 #ifndef START_RAMP_MS
 #define START_RAMP_MS       400
 #endif
@@ -352,6 +358,11 @@ static void follow_pd(void)
     if (error <= -30 || error >= 30) {          /* only an OUTER sensor sees the line: sharp bend */
         int side = error < 0 ? -1 : 1;          /* pivot: outer wheel forward, inner wheel back */
         drive(side > 0 ? SHARP_OUTER : -SHARP_INNER, side > 0 ? -SHARP_INNER : SHARP_OUTER);
+        return;
+    }
+    if (TURN_FWD && (error <= -20 || error >= 20)) {   /* line under the 2 outer sensors on one side: */
+        int side = error < 0 ? -1 : 1;                /* pivot, outer wheel forward, inner backwards */
+        drive(side > 0 ? TURN_FWD : -TURN_BACK, side > 0 ? -TURN_BACK : TURN_FWD);
         return;
     }
     int d = error - last_error;
@@ -904,7 +915,7 @@ void Robot_Init(void)
         bt_write(hello, sizeof hello);
     }
     leds(1, 1, 1); HAL_Delay(300); leds(0, 0, 0);       /* "I'm alive" flash */
-    debug_print("\r\nAutocar ready v3.8. MODE button = change mode, START = go/stop, hold START = reset route\r\n");
+    debug_print("\r\nAutocar ready v3.8p (pivot turn). MODE button = change mode, START = go/stop, hold START = reset route\r\n");
     loop_t = HAL_GetTick();
 }
 

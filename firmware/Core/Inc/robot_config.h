@@ -48,20 +48,22 @@
  * Find it: raise it until a wheel always turns in sharp corners; if the robot
  * jerks or is too fast in gentle steering, lower it. 0 = off.                */
 #ifndef MOTOR_MIN
-#define MOTOR_MIN            300
+#define MOTOR_MIN            200
 #endif
 
 /* ---------------- LINE FOLLOWING ----------------
  * Speeds are 0..999 (999 = full power). Start slow, speed up later. */
-#define BASE_SPEED           180  /* straight-line speed                         */
+#define BASE_SPEED           200  /* straight-line speed                         */
 #define MAX_SPEED            999  /* no wheel is ever driven faster than this    */
-#define KP                   190  /* how hard it steers back to the line         */
-#define KD                   260  /* damping: stops it wobbling left-right       */
-#define CORNER_SLOW          70  /* slow BOTH wheels in bends: line 2 sensors off-centre = BASE_SPEED - 200.
+#define KP                   90  /* how hard it steers back to the line         */
+#define KD                   250	  /* damping: stops it wobbling left-right       */
+#define CORNER_SLOW          60  /* slow BOTH wheels in bends: line 2 sensors off-centre = BASE_SPEED - 200.
                                      Raise if it runs wide on bends, 0 = off */
-#define SEARCH_SPEED         300  /* spin speed while looking for a lost line    */
-#define SHARP_OUTER          700  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
-#define SHARP_INNER          250  /* ...and inner wheel BACKWARDS at this speed. Raise both = sharper turns */
+#define SEARCH_SPEED         250  /* spin speed while looking for a lost line    */
+#define SHARP_OUTER          550  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
+#define SHARP_INNER          50
+#define TURN_FWD             0   /* pivot: outer wheel forward  */
+#define TURN_BACK            0   /* pivot: inner wheel backwards *//* ...and inner wheel BACKWARDS at this speed. Raise both = sharper turns */
 
 #define GAP_MS               600  /* line missing shorter than this = dashed gap: keep going straight.
                                      Raise it if the robot spins inside dashed-line gaps. */
