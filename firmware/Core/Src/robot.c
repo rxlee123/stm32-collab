@@ -63,6 +63,12 @@
 #ifndef JUNCTION_GAP_MS
 #define JUNCTION_GAP_MS     150
 #endif
+#ifndef JUNCTION_MIN_MS
+#define JUNCTION_MIN_MS      20
+#endif
+#ifndef BEND_BACK
+#define BEND_BACK           100
+#endif
 #ifndef D_MS
 #define D_MS                 80
 #endif
@@ -377,12 +383,22 @@ static void follow_pd(uint8_t damp)   /* damp 0: no damping (WIDE: 3+ sensors, t
     /* Damping (the D in PD): brake the swing when the line moves across the sensors.
      * Old code used "error - last_error": non-zero for ONE 2 ms loop only, far too short
      * for the motors, so KD did almost nothing and the robot swung from side to side.
-     * Now the last change is kept for D_MS, long enough for the wheels to react.         */
+     * Now the last change is kept for D_MS, long enough for the wheels to react.
+     * Only a REAL swing is braked: two steps in the same direction (e.g. 1100 -> 0100 -> 0110).
+     * A single jump (line found again after a spin) or a flicker back and forth on a sensor
+     * edge (0110 <-> 0010) gets no brake: those kicks threw the robot about (22 Nov logs). */
     uint32_t now = HAL_GetTick();
     if (!damp || after_wide) {                   /* in WIDE, and the first reading after it: */
         after_wide = !damp;                      /* no damping (the 3-sensor position is fake) */
         d_t = now - D_MS;
-    } else if (error != last_error) { d_hold = error - last_error; d_t = now; }
+    } else if (error != last_error) {
+        static int      prev_ch;
+        static uint32_t prev_t;
+        int ch = error - last_error;
+        if (prev_ch * ch > 0 && now - prev_t < 2 * D_MS) { d_hold = ch; d_t = now; }   /* 2nd step the same way */
+        else d_t = now - D_MS;                                                         /* 1st step or flicker: no brake */
+        prev_ch = ch; prev_t = now;
+    }
     int d = (D_MS && now - d_t < D_MS) ? d_hold : 0;
     int corr = (KP * error + KD * d) / 10;      /* error is x10, so divide back */
     int a = error < 0 ? -error : error;
@@ -485,7 +501,6 @@ static void auto_step(uint32_t now)
                 return;
             }
             wide_nocount = (now - last_junc_t < JUNCTION_GAP_MS);   /* same junction again: don't count twice */
-            if (!wide_nocount && act_is_instant(next_step().act)) { start_junction_action(now); return; }
             auto_enter(AS_WIDE, now);
             wide_all_t = now;
             drive(BASE_SPEED, BASE_SPEED);
@@ -525,8 +540,13 @@ static void auto_step(uint32_t now)
                 debug_print("FINISH: stopped\r\n");
                 return;
             }
-            if (curve_side && t < SEARCH_MS) {  /* bend: spin towards the side it left from */
-                drive(curve_side * SEARCH_SPEED, -curve_side * SEARCH_SPEED);
+            if (curve_side && t < SEARCH_MS) {  /* bend: turn towards the side it left from */
+                /* Spin, but drifting BACKWARDS by BEND_BACK: the robot has already rolled past the
+                 * corner, and sensors close to the wheels only sweep a small circle when spinning
+                 * on the spot, so they could miss every line (22 Nov video). Drifting back brings
+                 * them over the corner again while turning. BEND_BACK 0 = spin on the spot.     */
+                int outer = SEARCH_SPEED - BEND_BACK, inner = -SEARCH_SPEED - BEND_BACK;
+                drive(curve_side > 0 ? outer : inner, curve_side > 0 ? inner : outer);
             }
             else if (!curve_side && t < GAP_MS) /* dashed gap: keep straight, next dash is ahead */
                 drive(BASE_SPEED, BASE_SPEED);
@@ -561,6 +581,11 @@ static void auto_step(uint32_t now)
     case AS_WIDE:
         if (line_bits != 0xF) wide_all_t = now;     /* safety timer counts only while ALL 4 see black */
         if (n >= 3) {
+            /* words that act at once (INVERT, BLIND, PICKUP, DROP): as soon as the patch is a real one */
+            if (!wide_nocount && act_is_instant(next_step().act) && now - state_t0 >= JUNCTION_MIN_MS) {
+                start_junction_action(now);
+                return;
+            }
             /* keep steering while on the wide patch (a line under 3 sensors when slightly
              * off-centre must still be followed); a full crossing (1111) steers straight */
             error = Robot_LineError(line_bits, error);
@@ -579,6 +604,10 @@ static void auto_step(uint32_t now)
             return;
         }
         if (wide_nocount) auto_enter(AS_FOLLOW, now);   /* part of the junction just counted */
+        else if (now - state_t0 < JUNCTION_MIN_MS) {     /* too short: a flicker, not a junction */
+            log_msg("  wide flicker %lums: not counted\r\n", (unsigned long)(now - state_t0));
+            auto_enter(AS_FOLLOW, now);
+        }
         else start_junction_action(now);         /* short wide area = junction */
         return;
 
@@ -907,8 +936,11 @@ static void sensor_test_step(uint32_t now)
 {
     stop_motors();
     uint8_t n = Robot_LineCount(black_bits);
-    if (n >= 3 && !st_wide) {
-        st_wide = 1;
+    static uint32_t st_t0;
+    static uint8_t  st_done;
+    if (n >= 3 && !st_wide) { st_wide = 1; st_t0 = now; st_done = 0; }
+    if (n >= 3 && st_wide && !st_done && now - st_t0 >= JUNCTION_MIN_MS) {   /* same rule as AUTO */
+        st_done = 1;
         if (now - st_end_t >= JUNCTION_GAP_MS) {
             st_count++;
             log_msg("WIDE #%d b=%d%d%d%d\r\n", st_count,
@@ -938,7 +970,7 @@ void Robot_Init(void)
         bt_write(hello, sizeof hello);
     }
     leds(1, 1, 1); HAL_Delay(300); leds(0, 0, 0);       /* "I'm alive" flash */
-    debug_print("\r\nAutocar ready v3.8s (corner after a wide patch). MODE button = change mode, START = go/stop, hold START = reset route\r\n");
+    debug_print("\r\nAutocar ready v3.8w (corner turn drifts back). MODE button = change mode, START = go/stop, hold START = reset route\r\n");
     loop_t = HAL_GetTick();
 }
 

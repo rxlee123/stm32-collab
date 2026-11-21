@@ -55,14 +55,14 @@
  * Speeds are 0..999 (999 = full power). Start slow, speed up later. */
 #define BASE_SPEED           200  /* straight-line speed                         */
 #define MAX_SPEED            999  /* no wheel is ever driven faster than this    */
-#define KP                   90  /* how hard it steers back to the line         */
-#define KD                   250  /* damping: stops it wobbling left-right. Wobbles: raise. Jerky/twitchy: lower */
+#define KP                   70  /* how hard it steers back to the line         */
+#define KD                   350  /* damping: stops it wobbling left-right. Wobbles: raise. Jerky/twitchy: lower */
 #define D_MS                  80  /* how long the damping acts after the line moves (ms). 0 = no damping */
-#define CORNER_SLOW          60  /* slow BOTH wheels in bends: line 2 sensors off-centre = BASE_SPEED - 200.
+#define CORNER_SLOW          30  /* slow BOTH wheels in bends: line 2 sensors off-centre = BASE_SPEED - 200.
                                      Raise if it runs wide on bends, 0 = off */
-#define SEARCH_SPEED         250  /* spin speed while looking for a lost line    */
-#define SHARP_OUTER          550  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
-#define SHARP_INNER          50
+#define SEARCH_SPEED         200  /* spin speed while looking for a lost line    */
+#define SHARP_OUTER          400  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
+#define SHARP_INNER          0
 #define TURN_FWD             0   /* pivot: outer wheel forward  */
 #define TURN_BACK            0   /* pivot: inner wheel backwards *//* ...and inner wheel BACKWARDS at this speed. Raise both = sharper turns */
 
@@ -70,6 +70,9 @@
                                      Raise it if the robot spins inside dashed-line gaps. */
 #define BEND_MEMORY_MS       150  /* line vanishes within this long after a FAR sensor saw it = a corner:
                                      spin towards it at once (0 = off)                              */
+#define BEND_BACK            100  /* corner turn: spin while drifting BACKWARDS by this much, so sensors close
+                                     to the wheels sweep back over the corner. 0 = spin on the spot.
+                                     Robot still spins past corners: raise (150). Backs too far: lower (50). */
 #define SEARCH_MS           1800  /* then turn towards where the line was, for at most this long      */
 #define SWEEP_MS             300  /* after a long gap: look this long one way, then twice as long the other */
 #define SEEK_MS             3000  /* "seeking": after START in the start box, and after R_BLIND, R_INVERT,
@@ -83,6 +86,9 @@
 #define TURN_MAX_MS         1500  /* give up a junction turn after this long                          */
 #define SEEK_SETTLE_MS       150  /* after seeking (start box, blind parts...): junctions count only after
                                      the line has been followed this long (box edges are not junctions) */
+#define JUNCTION_MIN_MS       20  /* 3+ sensors must see the line at least this long to count as a junction
+                                     (shorter = a flicker, ignored). Fake J-numbers: raise to 30-40.
+                                     A real junction is missed: lower it.                            */
 #define JUNCTION_GAP_MS      150  /* a new junction is only counted this long after the last one
                                      (stops one messy crossing from counting twice)                  */
 
@@ -115,10 +121,8 @@
 /* MAP 1 draft (Box B). Lines marked "corner?" may not count on your robot:
  * if the J-numbers on the phone don't match, delete or add those R_FOLLOWs.
  * For a simple test track use:  #define ROUTE_LIST { R_FOLLOW }                */
-#define ROUTE_LIST   {                                                       \
-    R_FOLLOW      /*  1 corner after START (checkpoint A)        corner? */ \
-           /* 29 branch from box B on the bottom line: finish next */ \
-}
+#define ROUTE_LIST { R_FOLLOW  } /* J1: fake one on the first straight */ \
+                      /* J5: far point -> main line         */
 #endif
 
 /* ---------------- SERVO (one servo only, rule 4.5) ----------------

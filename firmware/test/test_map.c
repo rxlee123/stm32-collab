@@ -41,8 +41,8 @@ int main(void){
   set_black(0x6); press(GPIO_PIN_6, 80); run(200);
   printf("Route { BLIND(100), OPEN, PICKUP(50), LEFT, DROP(50), INVERT, FINISH }:\n");
   /* J1 BLIND: acts the moment the wide patch starts */
-  set_black(0xF); run(4);
-  CHECK(has("J1 BLIND"), "J1 BLIND starts at once (no waiting for the patch to end)");
+  set_black(0xF); run(JUNCTION_MIN_MS + 4);
+  CHECK(has("J1 BLIND"), "J1 BLIND starts once the patch is real (JUNCTION_MIN_MS), not at its end");
   set_black(0x5); run(100); CHECK(fwd_equal(), "blind: straight even on random black bricks");
   set_black(0x0); run(MS(100)); CHECK(has("blind part done"), "blind part ends after its distance");
   set_black(0x0); run(300); CHECK(fwd_equal(), "then drives straight looking for the line");
@@ -55,7 +55,7 @@ int main(void){
   CHECK(!has("J3"), "a 2nd wide patch right after a junction is NOT counted again (hold-off)");
   run(800); CHECK(htim3.ccr[4]==SERVO_OPEN_US, "J2 OPEN: gate is open");
   /* J3 PICKUP */
-  set_black(0xF); run(4); CHECK(has("J3 PICKUP") && fwd_equal(), "J3 PICKUP: drives in");
+  set_black(0xF); run(JUNCTION_MIN_MS + 4); CHECK(has("J3 PICKUP") && fwd_equal(), "J3 PICKUP: drives in");
   set_black(0x0); run(MS(50)+10); CHECK(left()==0 && right()==0 && has("closing gate"), "stops and closes the gate");
   run(GATE_MS+10); CHECK(left()>0 && right()<0, "then turns round");
   run(SPIN180_MS); CHECK(fwd_equal(), "then drives straight to find the line");
@@ -68,14 +68,14 @@ int main(void){
   set_black(0x6); run(300);
   run(300);
   /* J5 DROP */
-  set_black(0xF); run(4); CHECK(has("J5 DROP") && fwd_equal(), "J5 DROP: drives into the box");
+  set_black(0xF); run(JUNCTION_MIN_MS + 4); CHECK(has("J5 DROP") && fwd_equal(), "J5 DROP: drives into the box");
   set_black(0x0); run(MS(50)+10); CHECK(has("opening gate") && left()==0, "stops and opens the gate");
   run(GATE_MS+10); CHECK(left()<0 && right()<0, "backs out");
   run(MS(50)); CHECK(left()>0 && right()<0, "turns round");
   run(SPIN180_MS); CHECK(fwd_equal(), "drives straight to find the line");
   set_black(0x6); run(300);
   /* J6 INVERT */
-  set_black(0xF); run(4); CHECK(has("J6 INVERT") && has("now following a WHITE line"), "J6 INVERT: white-line mode at once");
+  set_black(0xF); run(JUNCTION_MIN_MS + 4); CHECK(has("J6 INVERT") && has("now following a WHITE line"), "J6 INVERT: white-line mode at once");
   set_black(0x9); run(100); CHECK(fwd_equal(), "follows the white line in the middle");
   set_black(0xB); run(10); CHECK(left()>right(), "white line to the right: turns right");
   set_black(0x9); run(300);

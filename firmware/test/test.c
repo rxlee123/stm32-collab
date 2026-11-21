@@ -115,9 +115,11 @@ int main(void){
   CHECK(left()==BASE_SPEED && right()==BASE_SPEED, "T-junction (both sides at once), then line gone: no guess, straight");
   set_black(0x6); run(300);
   set_black(0x8); run(20);         /* sharp bend: line runs out under the far-right sensor */
-  CHECK(left()>0 && right()<0, "only the far-right sensor sees the line: pivots right (fast turn)");
+  CHECK(left()>0 && right()<=0, "only the far-right sensor sees the line: sharp right (inner wheel stops or reverses)");
   set_black(0x0); run(30);
   CHECK(left()>0 && right()<0, "line left from the right side: spins right AT ONCE, no straight run");
+  CHECK(-right() > left(), "corner turn drifts backwards (BEND_BACK): inner wheel back faster than outer forward");
+  set_black(0x8); run(10); set_black(0xC); run(10);   /* spinning right: the line comes back in from the right */
   set_black(0x6); run(20);
   CHECK(left()<right(), "found again in the middle while spinning right: short counter-steer brakes the spin (KD)");
   run(D_MS + 10);
@@ -126,6 +128,17 @@ int main(void){
     set_black(0xE); run(40); set_black(0x6); run(20); set_black(0x0); run(30);   /* your log 21 Nov: wide, 0110, gone */
     CHECK(strstr(log_txt,"BEND right")!=NULL && left()>0 && right()<0,
           "corner: 0111, then centred 0110 for a moment, then gone -> BEND right (not GAP)"); }
+  { set_black(0x6); run(400); log_txt[0]=0;
+    set_black(0xE); run(10); set_black(0x6); run(50);        /* 10 ms flicker of 0111 */
+    CHECK(strstr(log_txt,"not counted")!=NULL && strstr(log_txt,"J")==NULL, "3 sensors for only 10 ms: a flicker, NOT counted as a junction");
+    set_black(0x6); run(400); log_txt[0]=0;
+    set_black(0xE); run(40); set_black(0x6); run(20);        /* 40 ms: a real junction */
+    CHECK(strstr(log_txt,"J")!=NULL, "3 sensors for 40 ms: counted as a junction"); }
+  { int ok=1; set_black(0x6); run(300);
+    for (int i=0;i<8;i++){ set_black(0x4); run(30); if(left()<0||right()<0) ok=0; set_black(0x6); run(30); if(left()<0||right()<0) ok=0; }
+    CHECK(ok, "your log 22 Nov: line flickers 0110 <-> 0010 on a sensor edge -> no wheel reverses (no kicks)"); }
+  { set_black(0x6); run(300); set_black(0x1); run(30); set_black(0x0); run(100); set_black(0x6); run(6);
+    CHECK(left()>=0 && right()>=0, "your log 22 Nov: line found centred after a spin -> no L=950 R=-550 kick"); }
   printf("Junction vs colour change:\n");
   set_black(0xF); run(60); set_black(0x6); run(20);
   int j=0; { char*p=strstr(log_txt,"junc="); (void)p; }
