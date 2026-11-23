@@ -138,6 +138,12 @@
  * CIRCLE faster, SQUARE slower, SELECT stop.
  * Letters also work (Serial Studio, PuTTY, "Bluetooth RC Controller"-style apps):
  * F B L R G I H J S = drive, 0-9 / q = speed, W/w or C/O = gate close/open */
+/* ONE-TIME RENAME of the Bluetooth module (many teams have "HC-06"/"BT05"...). Remove the // ,
+ * pick a name (letters/digits, no spaces, max 12), upload, start the robot with NO phone
+ * connected. The USB serial monitor says if it worked (6 fast LED flashes = failed).
+ * Then switch the robot off/on, put the // back and upload again. The name stays saved.  */
+// #define BT_NAME            "Doomsday01"
+
 #define MANUAL_SPEED_DEFAULT  700
 #define MANUAL_TURN_SPEED     550
 #define BT_TIMEOUT_MS         500  /* safety: stop if no command arrives for this long (phone out of

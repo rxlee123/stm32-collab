@@ -167,6 +167,7 @@ static volatile uint8_t bt_rearm;        /* 1 = receiving must be switched on ag
 static uint32_t bt_last;
 static int      manual_speed = MANUAL_SPEED_DEFAULT;
 static uint8_t  bt_from_app;     /* last command came from the Dabble app (1) or a letter (0) */
+static int      rename_msg_ok = -1;  /* BT_NAME rename result: -1 not tried, 0 failed, 1-3 = style that worked */
 
 /* motor test */
 static uint8_t  mt_running;
@@ -711,6 +712,49 @@ static int bt_read(void)
     return c;
 }
 
+#ifdef BT_NAME
+/* ---- One-time Bluetooth rename (only if BT_NAME is set in robot_config.h) -------------
+ * While no phone is connected, the module treats text from the Blue Pill as AT commands.
+ * BLE modules differ in the exact command, so three styles are tried in a row:
+ *   1. "AT+NAMEname"          (HM-10 style: no Enter needed)
+ *   2. then just Enter        (turns 1. into "AT+NAMEname" + Enter: JDY / BT05 / AT-09 style)
+ *   3. "AT+NAME=name" + Enter (HC-08 style)
+ * The first one that answers "OK" wins. The name is saved inside the module. */
+static int bt_at(const char *cmd, char *reply, int n, uint32_t wait_ms)
+{
+    int k = 0;
+    bt_print(cmd);
+    uint32_t t0 = HAL_GetTick();
+    while (HAL_GetTick() - t0 < wait_ms) {
+        int c = bt_read();
+        if (c >= 0 && k < n - 1) reply[k++] = (char)c;
+    }
+    reply[k] = 0;
+    for (int i = 0; i < k; i++) if (reply[i] == '\r' || reply[i] == '\n') reply[i] = ' ';
+    return strstr(reply, "OK") != NULL;
+}
+
+static void bt_rename(void)
+{
+    char cmd[40], reply[48], s[200];
+    int style = 0;
+    HAL_Delay(1000);                                       /* let the module start up */
+    snprintf(cmd, sizeof cmd, "AT+NAME%s", BT_NAME);
+    if (bt_at(cmd, reply, sizeof reply, 1000)) style = 1;
+    else if (bt_at("\r\n", reply, sizeof reply, 1000)) style = 2;
+    else {
+        snprintf(cmd, sizeof cmd, "AT+NAME=%s\r\n", BT_NAME);
+        if (bt_at(cmd, reply, sizeof reply, 1000)) style = 3;
+    }
+    if (style) snprintf(s, sizeof s, "\r\nBluetooth renamed to %s (style %d, module said: %s). "
+                        "Switch the robot OFF and ON, then remove BT_NAME.\r\n", BT_NAME, style, reply);
+    else       snprintf(s, sizeof s, "\r\nBluetooth rename FAILED (module said: '%s'). "
+                        "Is a phone still connected? Disconnect it and restart the robot.\r\n", reply);
+    HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), 100);   /* USB cable only */
+    rename_msg_ok = style;
+}
+#endif
+
 /* Letter commands ("Bluetooth RC Controller"-style apps, Serial Studio, PuTTY) */
 static void letter_command(int c, uint32_t now)
 {
@@ -965,12 +1009,16 @@ void Robot_Init(void)
     /* The servo signal is NOT started here: the servo stays limp and
        silent until AUTO starts or you send a gate command.             */
     HAL_UART_Receive_IT(&huart3, &bt_byte, 1);
+#ifdef BT_NAME
+    bt_rename();                         /* before anything else is sent to the module */
+#endif
     {   /* tell the Dabble app (if connected) that the robot is there: same frame as Dabble's library */
         static const uint8_t hello[] = { 0xFF, 0x00, 0x01, 0x00, 0x00 };
         bt_write(hello, sizeof hello);
     }
     leds(1, 1, 1); HAL_Delay(300); leds(0, 0, 0);       /* "I'm alive" flash */
-    debug_print("\r\nAutocar ready v3.8w (corner turn drifts back). MODE button = change mode, START = go/stop, hold START = reset route\r\n");
+    if (rename_msg_ok == 0) { for (int i = 0; i < 6; i++) { leds(1, 1, 1); HAL_Delay(100); leds(0, 0, 0); HAL_Delay(100); } }  /* rename failed: 6 fast flashes */
+    debug_print("\r\nAutocar ready v3.8w2 (v3.8w + optional BT_NAME rename). MODE button = change mode, START = go/stop, hold START = reset route\r\n");
     loop_t = HAL_GetTick();
 }
 
