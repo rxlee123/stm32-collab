@@ -16,6 +16,74 @@
 #include "robot_config.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
+
+/* Defaults for newer settings, so an older robot_config.h still builds.
+ * Put a line in robot_config.h to change any of them. */
+#ifndef SEEK_MS
+#ifdef START_STRAIGHT_MS
+#define SEEK_MS START_STRAIGHT_MS
+#else
+#define SEEK_MS            3000
+#endif
+#endif
+#ifndef SPEED_MM_S
+#define SPEED_MM_S          300
+#endif
+#ifndef FINISH_MM
+#define FINISH_MM           150
+#endif
+#ifndef GATE_MS
+#define GATE_MS             600
+#endif
+#ifndef SPIN180_MS
+#define SPIN180_MS          900
+#endif
+#ifndef TURN_FWD
+#define TURN_FWD            450
+#endif
+#ifndef TURN_BACK
+#define TURN_BACK           250
+#endif
+#ifndef START_RAMP_MS
+#define START_RAMP_MS       400
+#endif
+#ifndef WIDE_MAX_MS
+#define WIDE_MAX_MS        1500
+#endif
+#ifndef MOTOR_MIN
+#define MOTOR_MIN             0
+#endif
+#ifndef BEND_MEMORY_MS
+#define BEND_MEMORY_MS      150
+#endif
+#ifndef SEEK_SETTLE_MS
+#define SEEK_SETTLE_MS      150
+#endif
+#ifndef JUNCTION_GAP_MS
+#define JUNCTION_GAP_MS     150
+#endif
+#ifndef JUNCTION_MIN_MS
+#define JUNCTION_MIN_MS      20
+#endif
+#ifndef BEND_BACK
+#define BEND_BACK           100
+#endif
+#ifndef D_MS
+#define D_MS                 80
+#endif
+#ifndef BT_DEBUG
+#define BT_DEBUG              2
+#endif
+#ifndef BT_STATUS_MS
+#define BT_STATUS_MS        250
+#endif
+#ifndef MANUAL_SPEED_STEP
+#define MANUAL_SPEED_STEP   100
+#endif
+#ifndef DABBLE_TIMEOUT_MS
+#define DABBLE_TIMEOUT_MS     0
+#endif
 
 extern TIM_HandleTypeDef htim2;   /* motor PWM: CH1 = A0, CH4 = A3 */
 extern TIM_HandleTypeDef htim3;   /* servo PWM: CH4 = B1           */
@@ -34,13 +102,20 @@ typedef enum {
     AS_CROSS,         /* driving straight across a junction        */
     AS_TURN,          /* turning onto a side branch                */
     AS_LOST,          /* line lost for too long: stopped           */
-    AS_FINISHED       /* reached the end: stopped                  */
+    AS_FINISHED,      /* reached the end: stopped                  */
+    AS_BLIND,         /* R_BLIND: straight, ignoring the sensors   */
+    AS_PICKUP,        /* R_PICKUP: grab the cube and turn round    */
+    AS_DROP           /* R_DROP: leave the cube and turn round     */
 } AutoState;
 
 static const char *MODE_NAME[MODE_COUNT] = { "AUTO", "MANUAL", "SENSOR", "MOTOR" };
-static const char *STATE_NAME[] = { "IDLE", "FOLLOW", "WIDE", "CROSS", "TURN", "LOST", "FINISH" };
+static const char *STATE_NAME[] = { "IDLE", "FOLLOW", "WIDE", "CROSS", "TURN", "LOST", "FINISH",
+                                     "BLIND", "PICKUP", "DROP" };
+static const char *ACT_NAME[] = { "FOLLOW", "LEFT", "RIGHT", "STRAIGHT", "FINISH",
+                                  "INVERT", "BLIND", "OPEN", "PICKUP", "DROP" };
 
-static const RouteAction route[] = ROUTE_LIST;
+static const RouteStep route[] = ROUTE_LIST;
+static const uint32_t invert_ms = WIDE_TO_INVERT_MS;   /* automatic colour swap time, 0 = off */
 #define ROUTE_LEN ((int)(sizeof(route) / sizeof(route[0])))
 
 typedef struct {
@@ -60,9 +135,19 @@ static AutoState astate = AS_IDLE;
 static uint8_t  black_bits;          /* bit i = sensor i sees BLACK            */
 static uint8_t  line_bits;           /* bit i = sensor i sees the LINE colour  */
 static uint8_t  inverted;            /* 1 = following a WHITE line on black    */
-static int      error, last_error, last_side;
+static int      error, last_error, last_side, exit_err;
 static uint32_t state_t0, lost_t0;
 static uint8_t  was_lost;
+static uint8_t  seen_line;           /* 0 = seeking: drive straight to the next line (start box, after a blind part) */
+static uint32_t last_junc_t;         /* when the last junction was counted */
+static uint8_t  wide_nocount;
+static uint32_t wide_all_t;          /* WIDE: last time NOT all 4 sensors were black (safety stop) */
+static uint32_t line_seen_t;         /* seeking: when the line was first seen (0 = not yet) */
+static uint32_t wide_seen_t;         /* last time 3+ sensors saw the line (a corner or junction) */
+static uint32_t left_seen_t, right_seen_t;   /* last time the far-left / far-right sensor saw the line */
+static int8_t   exit_side;           /* where the line went when it vanished: -1 left, 0 middle, +1 right */        /* this wide patch belongs to the junction just counted */
+static uint8_t  seq_phase;           /* step inside PICKUP / DROP */
+static uint32_t seq_ms;              /* how long the current blind drive lasts */
 static int      junction_index;
 static uint8_t  finish_armed;
 static int8_t   turn_dir;            /* -1 left, +1 right                      */
@@ -78,23 +163,73 @@ static uint32_t servo_t;
 static uint8_t  bt_byte;
 static volatile uint8_t bt_buf[32];
 static volatile uint8_t bt_head, bt_tail;
+static volatile uint8_t bt_rearm;        /* 1 = receiving must be switched on again */
 static uint32_t bt_last;
 static int      manual_speed = MANUAL_SPEED_DEFAULT;
+static uint8_t  bt_from_app;     /* last command came from the Dabble app (1) or a letter (0) */
+static int      rename_msg_ok = -1;  /* BT_NAME rename result: -1 not tried, 0 failed, 1-3 = style that worked */
 
 /* motor test */
 static uint8_t  mt_running;
 static uint32_t mt_t0;
 
-static uint32_t loop_t, print_t;
+static uint32_t loop_t, print_t, bt_status_t;
+static int      st_count;            /* SENSOR TEST: wide patches counted (for mapping junctions by hand) */
+static uint8_t  st_wide;
+static uint32_t st_end_t;
 
 /* ------------------------------------------------------------------ */
 /*  Small helpers                                                     */
 /* ------------------------------------------------------------------ */
 static int clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+/* ---- Bluetooth sending without waiting --------------------------------
+ * Text for the phone goes into a ring buffer; the UART sends it in the
+ * background (interrupt), so the robot never pauses to talk.
+ * If the buffer is full, the new text is dropped instead of waiting. */
+static uint8_t           tx_buf[512];
+static volatile uint16_t tx_head, tx_tail, tx_len;
+static volatile uint8_t  tx_busy;
+
+static void bt_kick(void)
+{
+    if (tx_busy || tx_head == tx_tail) return;
+    uint16_t len = (tx_head > tx_tail) ? (uint16_t)(tx_head - tx_tail) : (uint16_t)(sizeof tx_buf - tx_tail);
+    tx_busy = 1; tx_len = len;
+    if (HAL_UART_Transmit_IT(&huart3, &tx_buf[tx_tail], len) != HAL_OK) tx_busy = 0;
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart != &huart3) return;
+    tx_tail = (uint16_t)((tx_tail + tx_len) % sizeof tx_buf);
+    tx_busy = 0;
+    bt_kick();
+}
+
+static void bt_write(const uint8_t *d, uint16_t n)
+{
+    uint16_t used = (uint16_t)((tx_head + sizeof tx_buf - tx_tail) % sizeof tx_buf);
+    if (n >= sizeof tx_buf - used) return;               /* full: drop it, never wait */
+    for (uint16_t i = 0; i < n; i++) { tx_buf[tx_head] = d[i]; tx_head = (uint16_t)((tx_head + 1) % sizeof tx_buf); }
+    bt_kick();
+}
+
+static void bt_print(const char *s) { bt_write((const uint8_t *)s, (uint16_t)strlen(s)); }
+
+/* Text for the USB cable (serial monitor) and, if BT_DEBUG is on, the phone too */
 static void debug_print(const char *s)
 {
     HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), 20);
+    if (BT_DEBUG >= 1) bt_print(s);
+}
+
+/* Like printf: log("J%d %s\r\n", 3, "LEFT") */
+static void log_msg(const char *fmt, ...)
+{
+    char s[96];
+    va_list ap; va_start(ap, fmt); vsnprintf(s, sizeof s, fmt, ap); va_end(ap);
+    debug_print(s);
 }
 
 /* ------------------------------------------------------------------ */
@@ -106,7 +241,9 @@ static void motor_raw(int which_a, int speed)
     GPIO_PinState in_fwd = speed >= 0 ? GPIO_PIN_SET : GPIO_PIN_RESET;
     GPIO_PinState in_rev = speed >= 0 ? GPIO_PIN_RESET : GPIO_PIN_SET;
     int duty = speed < 0 ? -speed : speed;
+    if (duty > PWM_MAX) duty = PWM_MAX;
     if (duty == 0) { in_fwd = GPIO_PIN_RESET; in_rev = GPIO_PIN_RESET; }
+    else duty = MOTOR_MIN + duty * (PWM_MAX - MOTOR_MIN) / PWM_MAX;   /* lift small speeds above the stall point */
 
     if (which_a) {      /* motor A: IN1 = A2, IN2 = A1, EN = A3 (TIM2 CH4) */
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, in_fwd);
@@ -120,12 +257,21 @@ static void motor_raw(int which_a, int speed)
 }
 
 /* Both wheels. Positive = forward. Limited to MAX_SPEED. */
+static uint32_t ramp_t0;             /* when AUTO was started (soft start) */
+static const uint32_t ramp_ms = START_RAMP_MS;
+static uint8_t  ramp_on;
+
 static void drive(int left, int right)
 {
     speed_l = clamp(left, -MAX_SPEED, MAX_SPEED);
     speed_r = clamp(right, -MAX_SPEED, MAX_SPEED);
     int l = speed_l * LEFT_TRIM / 100;     /* weaken the stronger wheel */
     int r = speed_r * RIGHT_TRIM / 100;
+    if (ramp_on) {                         /* soft start: 0 -> full over START_RAMP_MS after START */
+        uint32_t t = HAL_GetTick() - ramp_t0;
+        if (mode != MODE_AUTO || t >= ramp_ms) ramp_on = 0;
+        else { l = l * (int)t / (int)ramp_ms; r = r * (int)t / (int)ramp_ms; }
+    }
     if (MOTOR_LEFT_REVERSED)  l = -l;
     if (MOTOR_RIGHT_REVERSED) r = -r;
     motor_raw(MOTOR_A_IS_LEFT ? 1 : 0, l);
@@ -219,29 +365,108 @@ int Robot_LineError(uint8_t bits, int last)
 /* ------------------------------------------------------------------ */
 static void auto_enter(AutoState s, uint32_t now) { astate = s; state_t0 = now; }
 
-static void follow_pd(void)
+static int      d_hold;              /* damping: the last change of the line position ... */
+static uint32_t d_t;                 /* ... and when it happened                         */
+
+static void follow_pd(uint8_t damp)   /* damp 0: no damping (WIDE: 3+ sensors, the position is not real) */
 {
-    int d = error - last_error;
+    static uint8_t after_wide;
+    if (error <= -30 || error >= 30) {          /* only an OUTER sensor sees the line: sharp bend */
+        int side = error < 0 ? -1 : 1;          /* pivot: outer wheel forward, inner wheel back */
+        drive(side > 0 ? SHARP_OUTER : -SHARP_INNER, side > 0 ? -SHARP_INNER : SHARP_OUTER);
+        return;
+    }
+    if (TURN_FWD && (error <= -20 || error >= 20)) {   /* line under the 2 outer sensors on one side: */
+        int side = error < 0 ? -1 : 1;                /* pivot, outer wheel forward, inner backwards */
+        drive(side > 0 ? TURN_FWD : -TURN_BACK, side > 0 ? -TURN_BACK : TURN_FWD);
+        return;
+    }
+    /* Damping (the D in PD): brake the swing when the line moves across the sensors.
+     * Old code used "error - last_error": non-zero for ONE 2 ms loop only, far too short
+     * for the motors, so KD did almost nothing and the robot swung from side to side.
+     * Now the last change is kept for D_MS, long enough for the wheels to react.
+     * Only a REAL swing is braked: two steps in the same direction (e.g. 1100 -> 0100 -> 0110).
+     * A single jump (line found again after a spin) or a flicker back and forth on a sensor
+     * edge (0110 <-> 0010) gets no brake: those kicks threw the robot about (22 Nov logs). */
+    uint32_t now = HAL_GetTick();
+    if (!damp || after_wide) {                   /* in WIDE, and the first reading after it: */
+        after_wide = !damp;                      /* no damping (the 3-sensor position is fake) */
+        d_t = now - D_MS;
+    } else if (error != last_error) {
+        static int      prev_ch;
+        static uint32_t prev_t;
+        int ch = error - last_error;
+        if (prev_ch * ch > 0 && now - prev_t < 2 * D_MS) { d_hold = ch; d_t = now; }   /* 2nd step the same way */
+        else d_t = now - D_MS;                                                         /* 1st step or flicker: no brake */
+        prev_ch = ch; prev_t = now;
+    }
+    int d = (D_MS && now - d_t < D_MS) ? d_hold : 0;
     int corr = (KP * error + KD * d) / 10;      /* error is x10, so divide back */
-    drive(BASE_SPEED + corr, BASE_SPEED - corr);
+    int a = error < 0 ? -error : error;
+    int base = BASE_SPEED - a * CORNER_SLOW / 10;   /* slow down in bends so it can turn in time */
+    drive(base + corr, base - corr);
+}
+
+static uint32_t mm_to_ms(uint32_t mm) { return mm * 1000u / SPEED_MM_S; }
+
+/* Start seeking: drive straight until the next line (used after blind parts and turns) */
+static void seek_line(uint32_t now)
+{
+    seen_line = 0; was_lost = 0; line_seen_t = 0;
+    last_error = error = 0;
+    auto_enter(AS_FOLLOW, now);
+}
+
+/* Words that act the MOMENT the wide patch starts (no waiting for it to end) */
+static int act_is_instant(uint8_t a)
+{
+    return a == A_INVERT || a == A_BLIND || a == A_PICKUP || a == A_DROP;
+}
+
+static RouteStep next_step(void)
+{
+    RouteStep follow = R_FOLLOW;
+    return junction_index < ROUTE_LEN ? route[junction_index] : follow;
 }
 
 static void start_junction_action(uint32_t now)
 {
-    RouteAction a = junction_index < ROUTE_LEN ? route[junction_index] : R_FOLLOW;
+    RouteStep st = next_step();
     junction_index++;
-    switch (a) {
-    case R_LEFT:  case R_RIGHT:
-        turn_dir = (a == R_LEFT) ? -1 : 1;
+    last_junc_t = now;
+    log_msg("J%d %s b=%d%d%d%d e=%d%s\r\n", junction_index, ACT_NAME[st.act],
+            black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1,
+            error, inverted ? " (white line)" : "");
+    switch (st.act) {
+    case A_LEFT:  case A_RIGHT:
+        turn_dir = (st.act == A_LEFT) ? -1 : 1;
         turn_left_line = 0;
         auto_enter(AS_TURN, now);
         break;
-    case R_STRAIGHT:
+    case A_STRAIGHT:
         auto_enter(AS_CROSS, now);
         break;
-    case R_FINISH:
+    case A_OPEN:
+        servo_set(SERVO_OPEN_US);
+        auto_enter(AS_CROSS, now);
+        break;
+    case A_FINISH:
         finish_armed = 1;
         auto_enter(AS_FOLLOW, now);
+        break;
+    case A_INVERT:
+        inverted ^= 1;
+        log_msg(inverted ? "  now following a WHITE line\r\n" : "  now following a BLACK line\r\n");
+        seek_line(now);
+        break;
+    case A_BLIND:
+        seq_ms = mm_to_ms(st.mm);
+        auto_enter(AS_BLIND, now);
+        break;
+    case A_PICKUP: case A_DROP:
+        seq_ms = mm_to_ms(st.mm);
+        seq_phase = 0;
+        auto_enter(st.act == A_PICKUP ? AS_PICKUP : AS_DROP, now);
         break;
     default:
         auto_enter(AS_FOLLOW, now);
@@ -249,9 +474,19 @@ static void start_junction_action(uint32_t now)
     }
 }
 
+/* Next step of PICKUP / DROP: restart the step timer */
+static void seq_next(uint32_t now) { seq_phase++; state_t0 = now; }
+
 static void auto_step(uint32_t now)
 {
     uint8_t n = Robot_LineCount(line_bits);
+    /* corner memory: when did a FAR sensor last see the line (in every state, junctions too) */
+    if (line_bits & 1) left_seen_t = now;
+    if (line_bits & 8) right_seen_t = now;
+    if (n >= 3) wide_seen_t = now;
+    /* centred again: forget it. But NOT just after a 3-sensor patch: at a corner the line
+     * can be centred for a moment before it vanishes, and the side must be remembered. */
+    if (line_bits == 0x6 && now - wide_seen_t > BEND_MEMORY_MS) left_seen_t = right_seen_t = now - 10000;
 
     switch (astate) {
     case AS_IDLE: case AS_LOST: case AS_FINISHED:
@@ -260,23 +495,70 @@ static void auto_step(uint32_t now)
 
     case AS_FOLLOW:
         if (n >= 3) {                           /* junction, or the background changed colour */
+            if (!seen_line) {                   /* seeking: box edges / the first line are not junctions */
+                line_seen_t = 0;
+                log_msg("  line found (not counted)\r\n");
+                auto_enter(AS_CROSS, now);
+                return;
+            }
+            wide_nocount = (now - last_junc_t < JUNCTION_GAP_MS);   /* same junction again: don't count twice */
             auto_enter(AS_WIDE, now);
+            wide_all_t = now;
             drive(BASE_SPEED, BASE_SPEED);
             return;
         }
         if (n == 0) {                           /* no line under any sensor */
-            if (!was_lost) { was_lost = 1; lost_t0 = now; }
+            uint8_t first = !was_lost;
+            if (!was_lost) {
+                was_lost = 1; lost_t0 = now; exit_err = error;
+                /* bend or gap? Only the far sensor at the end = bend. Also a bend if a far
+                 * sensor saw the line just before it vanished (sharp 90 degree corners). */
+                exit_side = exit_err <= -30 ? -1 : (exit_err >= 30 ? 1 : 0);
+                if (!exit_side && BEND_MEMORY_MS) {
+                    uint32_t l = now - left_seen_t, r = now - right_seen_t;
+                    /* the side seen more recently wins; both at the same time (a T) = no guess */
+                    if (r < BEND_MEMORY_MS && (l >= BEND_MEMORY_MS || r + 20 < l))      exit_side = 1;
+                    else if (l < BEND_MEMORY_MS && (r >= BEND_MEMORY_MS || l + 20 < r)) exit_side = -1;
+                }
+            }
             uint32_t t = now - lost_t0;
-            if (finish_armed && t > GAP_MS) {   /* end of the line after the last junction */
+            line_seen_t = 0;
+            if (!seen_line) {                   /* seeking (start box, after blind/turn): drive straight to the line */
+                if (t < SEEK_MS) { drive(BASE_SPEED, BASE_SPEED); return; }
+                brake(); auto_enter(AS_LOST, now);
+                debug_print("LOST: no line found while driving straight, check the start position or distances\r\n");
+                return;
+            }
+            /* How did the line disappear?
+             *  - off the SIDE (last seen under an outer sensor) = a bend: spin towards it now
+             *  - from the MIDDLE (last seen centred)            = a dashed gap: go straight */
+            int curve_side = exit_side;
+            if (first && !finish_armed)
+                log_msg(curve_side ? "  line gone at the side: BEND %s\r\n" : "  line gone in the middle: GAP, straight%s\r\n",
+                        curve_side < 0 ? "left" : (curve_side > 0 ? "right" : ""));
+            if (finish_armed && t > mm_to_ms(FINISH_MM)) {   /* end of the line after the last junction */
                 brake(); auto_enter(AS_FINISHED, now);
                 debug_print("FINISH: stopped\r\n");
                 return;
             }
-            if (t < GAP_MS)                     /* dashed line: keep straight */
+            if (curve_side && t < SEARCH_MS) {  /* bend: turn towards the side it left from */
+                /* Spin, but drifting BACKWARDS by BEND_BACK: the robot has already rolled past the
+                 * corner, and sensors close to the wheels only sweep a small circle when spinning
+                 * on the spot, so they could miss every line (22 Nov video). Drifting back brings
+                 * them over the corner again while turning. BEND_BACK 0 = spin on the spot.     */
+                int outer = SEARCH_SPEED - BEND_BACK, inner = -SEARCH_SPEED - BEND_BACK;
+                drive(curve_side > 0 ? outer : inner, curve_side > 0 ? inner : outer);
+            }
+            else if (!curve_side && t < GAP_MS) /* dashed gap: keep straight, next dash is ahead */
                 drive(BASE_SPEED, BASE_SPEED);
-            else if (t < GAP_MS + SEARCH_MS) {  /* turn towards where it was */
-                if (last_side) drive(last_side * SEARCH_SPEED, -last_side * SEARCH_SPEED);
-                else           drive(SEARCH_SPEED, SEARCH_SPEED);   /* never saw a side: go straight */
+            else if (!curve_side && t < GAP_MS + 4 * SWEEP_MS) {
+                if (t - GAP_MS < LOOP_MS) log_msg("  gap too long: SWEEP search\r\n");
+                /* gap too long: look one way, then the other way, then come BACK to the
+                 * middle, so the robot ends up facing forward again (no leftover spin) */
+                int first = last_side ? last_side : -1;
+                uint32_t k = t - GAP_MS;
+                int dir = (k < SWEEP_MS) ? first : (k < 3 * SWEEP_MS ? -first : first);
+                drive(dir * SEARCH_SPEED, -dir * SEARCH_SPEED);
             }
             else {
                 brake(); auto_enter(AS_LOST, now);
@@ -285,25 +567,49 @@ static void auto_step(uint32_t now)
             return;
         }
         was_lost = 0;
+        if (!seen_line) {                       /* count junctions only once the line is followed steadily */
+            if (!line_seen_t) line_seen_t = now;
+            if (now - line_seen_t >= SEEK_SETTLE_MS) seen_line = 1;
+        }
         error = Robot_LineError(line_bits, error);
-        if (error != 0) last_side = error < 0 ? -1 : 1;
-        follow_pd();
+        if (error <= -20)     last_side = -1;   /* remember only a CLEAR side,           */
+        else if (error >= 20) last_side = 1;    /* not small wobbles on a straight line  */
+        else if (error == 0)  last_side = 0;
+        follow_pd(1);
         last_error = error;
         return;
 
     case AS_WIDE:
-        drive(BASE_SPEED, BASE_SPEED);
+        if (line_bits != 0xF) wide_all_t = now;     /* safety timer counts only while ALL 4 see black */
         if (n >= 3) {
-            if (now - state_t0 >= WIDE_TO_INVERT_MS) {   /* long wide area = colour swap */
+            /* words that act at once (INVERT, BLIND, PICKUP, DROP): as soon as the patch is a real one */
+            if (!wide_nocount && act_is_instant(next_step().act) && now - state_t0 >= JUNCTION_MIN_MS) {
+                start_junction_action(now);
+                return;
+            }
+            /* keep steering while on the wide patch (a line under 3 sensors when slightly
+             * off-centre must still be followed); a full crossing (1111) steers straight */
+            error = Robot_LineError(line_bits, error);
+            follow_pd(0);
+            last_error = error;
+            if (invert_ms && now - state_t0 >= invert_ms) {   /* long wide area = colour swap (0 = off) */
                 inverted ^= 1;
                 debug_print(inverted ? "Background is BLACK now: following the WHITE line\r\n"
                                      : "Background is WHITE again: following the BLACK line\r\n");
                 last_error = error = 0;
                 auto_enter(AS_FOLLOW, now);
+            } else if (line_bits == 0xF && now - wide_all_t >= WIDE_MAX_MS && (!invert_ms || WIDE_MAX_MS > invert_ms)) {
+                brake(); auto_enter(AS_LOST, now);      /* safety: all black far too long (off the track?) */
+                debug_print("LOST: all sensors black too long (off the track?), press START to try again\r\n");
             }
             return;
         }
-        start_junction_action(now);              /* short wide area = junction */
+        if (wide_nocount) auto_enter(AS_FOLLOW, now);   /* part of the junction just counted */
+        else if (now - state_t0 < JUNCTION_MIN_MS) {     /* too short: a flicker, not a junction */
+            log_msg("  wide flicker %lums: not counted\r\n", (unsigned long)(now - state_t0));
+            auto_enter(AS_FOLLOW, now);
+        }
+        else start_junction_action(now);         /* short wide area = junction */
         return;
 
     case AS_CROSS:
@@ -318,9 +624,46 @@ static void auto_step(uint32_t now)
             if ((line_bits & 0x6) == 0) turn_left_line = 1;      /* centre sensors off the line */
         } else if (line_bits & 0x6) {                            /* centre sensor found a line */
             last_error = error = 0;
+            log_msg("  turn done\r\n");
             auto_enter(AS_FOLLOW, now);
         }
-        if (now - state_t0 > TURN_MAX_MS) auto_enter(AS_FOLLOW, now);
+        if (now - state_t0 > TURN_MAX_MS) { log_msg("  turn gave up (TURN_MAX_MS)\r\n"); auto_enter(AS_FOLLOW, now); }
+        return;
+
+    case AS_BLIND:                              /* straight ahead, sensors ignored */
+        drive(BASE_SPEED, BASE_SPEED);
+        if (now - state_t0 >= seq_ms) { log_msg("  blind part done, looking for the line\r\n"); seek_line(now); }
+        return;
+
+    case AS_PICKUP:                             /* drive in, close the gate, turn round */
+        switch (seq_phase) {
+        case 0: drive(BASE_SPEED, BASE_SPEED);
+                if (now - state_t0 >= seq_ms) { stop_motors(); servo_set(SERVO_CLOSED_US); log_msg("  cube: closing gate\r\n"); seq_next(now); }
+                break;
+        case 1: stop_motors();
+                if (now - state_t0 >= GATE_MS) { log_msg("  cube: turning round\r\n"); seq_next(now); }
+                break;
+        default: drive(SEARCH_SPEED, -SEARCH_SPEED);
+                if (now - state_t0 >= SPIN180_MS) seek_line(now);
+                break;
+        }
+        return;
+
+    case AS_DROP:                               /* drive in, open the gate, back out, turn round */
+        switch (seq_phase) {
+        case 0: drive(BASE_SPEED, BASE_SPEED);
+                if (now - state_t0 >= seq_ms) { stop_motors(); servo_set(SERVO_OPEN_US); log_msg("  box: opening gate\r\n"); seq_next(now); }
+                break;
+        case 1: stop_motors();
+                if (now - state_t0 >= GATE_MS) { log_msg("  box: backing out\r\n"); seq_next(now); }
+                break;
+        case 2: drive(-BASE_SPEED, -BASE_SPEED);
+                if (now - state_t0 >= seq_ms) { log_msg("  box: turning round\r\n"); seq_next(now); }
+                break;
+        default: drive(SEARCH_SPEED, -SEARCH_SPEED);
+                if (now - state_t0 >= SPIN180_MS) seek_line(now);
+                break;
+        }
         return;
     }
 }
@@ -328,6 +671,10 @@ static void auto_step(uint32_t now)
 static void auto_start(uint32_t now)
 {
     was_lost = 0;
+    seen_line = (Robot_LineCount(line_bits) > 0);   /* already on a line (e.g. a retry)? */
+    left_seen_t = right_seen_t = wide_seen_t = now - 10000;   /* forget old corners */
+    last_junc_t = now - JUNCTION_GAP_MS;
+    ramp_t0 = now; ramp_on = (ramp_ms > 0);
     last_error = error = 0;
     servo_set(SERVO_AUTO_US);
     auto_enter(AS_FOLLOW, now);
@@ -348,13 +695,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     if (huart == &huart3) {
         uint8_t next = (uint8_t)((bt_head + 1) % sizeof(bt_buf));
         if (next != bt_tail) { bt_buf[bt_head] = bt_byte; bt_head = next; }
-        HAL_UART_Receive_IT(&huart3, &bt_byte, 1);
+        if (HAL_UART_Receive_IT(&huart3, &bt_byte, 1) != HAL_OK) bt_rearm = 1;   /* retry from the loop */
     }
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-    if (huart == &huart3) HAL_UART_Receive_IT(&huart3, &bt_byte, 1);   /* recover after noise */
+    if (huart == &huart3 && HAL_UART_Receive_IT(&huart3, &bt_byte, 1) != HAL_OK) bt_rearm = 1;   /* recover after noise */
 }
 
 static int bt_read(void)
@@ -365,31 +712,190 @@ static int bt_read(void)
     return c;
 }
 
-static void manual_step(uint32_t now)
+#ifdef BT_NAME
+/* ---- One-time Bluetooth rename (only if BT_NAME is set in robot_config.h) -------------
+ * While no phone is connected, the module treats text from the Blue Pill as AT commands.
+ * BLE modules differ in the exact command, so three styles are tried in a row:
+ *   1. "AT+NAMEname"          (HM-10 style: no Enter needed)
+ *   2. then just Enter        (turns 1. into "AT+NAMEname" + Enter: JDY / BT05 / AT-09 style)
+ *   3. "AT+NAME=name" + Enter (HC-08 style)
+ * The first one that answers "OK" wins. The name is saved inside the module. */
+static int bt_at(const char *cmd, char *reply, int n, uint32_t wait_ms)
+{
+    int k = 0;
+    bt_print(cmd);
+    uint32_t t0 = HAL_GetTick();
+    while (HAL_GetTick() - t0 < wait_ms) {
+        int c = bt_read();
+        if (c >= 0 && k < n - 1) reply[k++] = (char)c;
+    }
+    reply[k] = 0;
+    for (int i = 0; i < k; i++) if (reply[i] == '\r' || reply[i] == '\n') reply[i] = ' ';
+    return strstr(reply, "OK") != NULL;
+}
+
+static void bt_rename(void)
+{
+    char cmd[40], reply[48], s[200];
+    int style = 0;
+    HAL_Delay(1000);                                       /* let the module start up */
+    snprintf(cmd, sizeof cmd, "AT+NAME%s", BT_NAME);
+    if (bt_at(cmd, reply, sizeof reply, 1000)) style = 1;
+    else if (bt_at("\r\n", reply, sizeof reply, 1000)) style = 2;
+    else {
+        snprintf(cmd, sizeof cmd, "AT+NAME=%s\r\n", BT_NAME);
+        if (bt_at(cmd, reply, sizeof reply, 1000)) style = 3;
+    }
+    if (style) snprintf(s, sizeof s, "\r\nBluetooth renamed to %s (style %d, module said: %s). "
+                        "Switch the robot OFF and ON, then remove BT_NAME.\r\n", BT_NAME, style, reply);
+    else       snprintf(s, sizeof s, "\r\nBluetooth rename FAILED (module said: '%s'). "
+                        "Is a phone still connected? Disconnect it and restart the robot.\r\n", reply);
+    HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), 100);   /* USB cable only */
+    rename_msg_ok = style;
+}
+#endif
+
+/* Letter commands ("Bluetooth RC Controller"-style apps, Serial Studio, PuTTY) */
+static void letter_command(int c, uint32_t now)
+{
+    int s = manual_speed, t = MANUAL_TURN_SPEED;
+    bt_last = now;
+    bt_from_app = 0;
+    switch (c) {
+    case 'F': drive(s, s);           break;
+    case 'B': drive(-s, -s);         break;
+    case 'L': drive(-t, t);          break;   /* spin left on the spot  */
+    case 'R': drive(t, -t);          break;   /* spin right on the spot */
+    case 'G': drive(s / 3, s);       break;   /* forward-left           */
+    case 'I': drive(s, s / 3);       break;   /* forward-right          */
+    case 'H': drive(-s / 3, -s);     break;   /* back-left              */
+    case 'J': drive(-s, -s / 3);     break;   /* back-right             */
+    case 'S': stop_motors();         break;
+    case 'W': case 'C': servo_set(SERVO_CLOSED_US); break;
+    case 'w': case 'O': servo_set(SERVO_OPEN_US);   break;
+    case 'q': manual_speed = MAX_SPEED; break;
+    default:
+        if (c >= '0' && c <= '9') manual_speed = 300 + (c - '0') * (MAX_SPEED - 300) / 9;
+        break;
+    }
+}
+
+/* ---- Dabble app gamepad (iPhone + Android) ----------------------------
+ * Every message from the app is a "frame" of bytes:
+ *   0xFF, module, function, number of arguments, [length, data...] ..., 0x00
+ * Gamepad = module 0x01, one argument of 2 bytes:
+ *   data[0] = buttons  bit0 START, bit1 SELECT, bit2 TRIANGLE, bit3 CIRCLE, bit4 CROSS, bit5 SQUARE
+ *   data[1] = function 0x01 (digital): bit0 UP, bit1 DOWN, bit2 LEFT, bit3 RIGHT
+ *             function 0x02 (joystick) / 0x03 (tilt): bits 7-3 = angle / 15 deg, bits 2-0 = push 0..7
+ * Module 0x00 function 0x03 = the app asking "which board are you?": we answer like Dabble's own library. */
+static uint8_t  dab_state, dab_mod, dab_fn, dab_argc, dab_argi, dab_len, dab_pos, dab_n;
+static uint8_t  dab_data[8];
+static uint32_t dab_t;
+static uint16_t dab_frames;                     /* shown as dab= on the serial monitor */
+static uint8_t  gp_fn, gp_buttons, gp_pad, gp_new, gp_prev;
+
+static void dabble_frame_done(uint32_t now)
+{
+    dab_frames++;
+    if (dab_mod == 0x00 && dab_fn == 0x03) {
+        static const uint8_t board_id[] = { 0xFF, 0x00, 0x03, 0x01, 0x04, 0x05, 0x01, 0x05, 0x02, 0x00 };
+        bt_write(board_id, sizeof board_id);
+    } else if (dab_mod == 0x01 && dab_n >= 2 && dab_fn >= 1 && dab_fn <= 3) {
+        gp_fn = dab_fn; gp_buttons = dab_data[0]; gp_pad = dab_data[1];
+        gp_new = 1;
+        (void)now;
+    }
+}
+
+/* Feed one byte. Returns 1 if it was part of an app frame (so it is NOT a letter command). */
+static int dabble_byte(uint8_t b, uint32_t now)
+{
+    if (dab_state && now - dab_t > 200) dab_state = 0;      /* half a frame went missing: start again */
+    dab_t = now;
+    switch (dab_state) {
+    case 0:
+        if (b != 0xFF) return 0;
+        dab_n = 0; dab_state = 1; return 1;
+    case 1: dab_mod = b;  dab_state = (b < 18) ? 2 : 0; return 1;
+    case 2: dab_fn = b;   dab_state = 3; return 1;
+    case 3:
+        dab_argc = b; dab_argi = 0;
+        dab_state = (b == 0) ? 6 : (b <= 4 ? 4 : 0);
+        return 1;
+    case 4:
+        dab_len = b; dab_pos = 0;
+        if (b == 0) { if (++dab_argi == dab_argc) dab_state = 6; }
+        else dab_state = (b <= 32) ? 5 : 0;
+        return 1;
+    case 5:
+        if (dab_n < sizeof dab_data) dab_data[dab_n++] = b;
+        if (++dab_pos == dab_len) dab_state = (++dab_argi == dab_argc) ? 6 : 4;
+        return 1;
+    default:                                              /* 6: waiting for the 0x00 end byte */
+        dab_state = 0;
+        if (b == 0x00) dabble_frame_done(now);
+        return 1;
+    }
+}
+
+/* cos() of 0, 15, 30 ... 345 degrees, x1000 (sin = the same table shifted by 90 degrees) */
+static const int16_t COS15[24] = { 1000, 966, 866, 707, 500, 259, 0, -259, -500, -707, -866, -966,
+                                  -1000,-966,-866,-707,-500,-259, 0,  259,  500,  707,  866,  966 };
+
+static void gamepad_apply(void)
+{
+    uint8_t pressed = gp_buttons & (uint8_t)~gp_prev;     /* buttons that were JUST pressed */
+    gp_prev = gp_buttons;
+    if (pressed & (1 << 2)) servo_set(SERVO_CLOSED_US);   /* TRIANGLE: close gate */
+    if (pressed & (1 << 4)) servo_set(SERVO_OPEN_US);     /* CROSS:    open gate  */
+    if (pressed & (1 << 3)) manual_speed = clamp(manual_speed + MANUAL_SPEED_STEP, 300, MAX_SPEED); /* CIRCLE */
+    if (pressed & (1 << 5)) manual_speed = clamp(manual_speed - MANUAL_SPEED_STEP, 300, MAX_SPEED); /* SQUARE */
+    if (gp_buttons & (1 << 1)) { stop_motors(); return; } /* SELECT held: stop */
+
+    int s = manual_speed, t = MANUAL_TURN_SPEED;
+    if (gp_fn == 0x01) {                                  /* digital: arrow buttons */
+        int up = gp_pad & 1, dn = (gp_pad >> 1) & 1, lf = (gp_pad >> 2) & 1, rt = (gp_pad >> 3) & 1;
+        if      (up && lf) drive(s / 3, s);
+        else if (up && rt) drive(s, s / 3);
+        else if (dn && lf) drive(-s / 3, -s);
+        else if (dn && rt) drive(-s, -s / 3);
+        else if (up)       drive(s, s);
+        else if (dn)       drive(-s, -s);
+        else if (lf)       drive(-t, t);
+        else if (rt)       drive(t, -t);
+        else               stop_motors();                 /* nothing held */
+    } else {                                              /* joystick or tilt */
+        int i = (gp_pad >> 3) % 24, r = gp_pad & 7;      /* angle step, push 0..7 */
+        long x = (long)COS15[i] * r;                      /* right = +, -7000..7000 */
+        long y = (long)COS15[(i + 18) % 24] * r;          /* up = +   (sin = cos - 90 deg) */
+        int fwd  = (int)(y * s / 7000);
+        int turn = (int)(x * t / 7000);
+        drive(fwd + turn, fwd - turn);                    /* push 0 = stop */
+    }
+}
+
+/* Read every Bluetooth byte: app frames go to the decoder, the rest are letter commands.
+ * Outside MANUAL nothing drives the car, and nothing is saved up for later. */
+static void bt_poll(uint32_t now)
 {
     int c;
     while ((c = bt_read()) >= 0) {
-        int s = manual_speed, t = MANUAL_TURN_SPEED;
-        bt_last = now;
-        switch (c) {
-        case 'F': drive(s, s);           break;
-        case 'B': drive(-s, -s);         break;
-        case 'L': drive(-t, t);          break;   /* spin left on the spot  */
-        case 'R': drive(t, -t);          break;   /* spin right on the spot */
-        case 'G': drive(s / 3, s);       break;   /* forward-left           */
-        case 'I': drive(s, s / 3);       break;   /* forward-right          */
-        case 'H': drive(-s / 3, -s);     break;   /* back-left              */
-        case 'J': drive(-s, -s / 3);     break;   /* back-right             */
-        case 'S': stop_motors();         break;
-        case 'W': case 'C': servo_set(SERVO_CLOSED_US); break;
-        case 'w': case 'O': servo_set(SERVO_OPEN_US);   break;
-        case 'q': manual_speed = MAX_SPEED; break;
-        default:
-            if (c >= '0' && c <= '9') manual_speed = 300 + (c - '0') * (MAX_SPEED - 300) / 9;
-            break;
+        if (dabble_byte((uint8_t)c, now)) {
+            if (gp_new) {                       /* a whole gamepad message just arrived */
+                gp_new = 0;
+                if (mode == MODE_MANUAL) { bt_last = now; bt_from_app = 1; gamepad_apply(); }
+            }
+            continue;
         }
+        if (mode == MODE_MANUAL) letter_command(c, now);
     }
-    if (BT_TIMEOUT_MS && now - bt_last > BT_TIMEOUT_MS) stop_motors();
+    if (mode != MODE_MANUAL) gp_prev = 0;
+}
+
+static void manual_step(uint32_t now)
+{
+    uint32_t limit = bt_from_app ? DABBLE_TIMEOUT_MS : BT_TIMEOUT_MS;
+    if (limit && now - bt_last > limit) stop_motors();
 }
 
 /* ------------------------------------------------------------------ */
@@ -447,14 +953,46 @@ static void print_status(uint32_t now)
 {
     if (!DEBUG_PRINT_MS || now - print_t < DEBUG_PRINT_MS) return;
     print_t = now;
-    char s[96];
-    snprintf(s, sizeof s, "%-6s %-6s black=%d%d%d%d inv=%d err=%3d L=%4d R=%4d junc=%d btn=%d%d\r\n",
+    char s[128];
+    snprintf(s, sizeof s, "%-6s %-6s black=%d%d%d%d inv=%d err=%3d L=%4d R=%4d junc=%d btn=%d%d dab=%u\r\n",
              MODE_NAME[mode], mode == MODE_AUTO ? STATE_NAME[astate] : "-",
              black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1,
              inverted, error, speed_l, speed_r, junction_index,
              HAL_GPIO_ReadPin(BTN_START_PORT, BTN_START_PIN),
-             HAL_GPIO_ReadPin(BTN_MODE_PORT, BTN_MODE_PIN));
-    debug_print(s);
+             HAL_GPIO_ReadPin(BTN_MODE_PORT, BTN_MODE_PIN), dab_frames);
+    HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), 20);
+
+    /* shorter line for the phone (Bluetooth is slower than the cable) */
+    if (BT_DEBUG >= 2 && now - bt_status_t >= BT_STATUS_MS) {
+        bt_status_t = now;
+        snprintf(s, sizeof s, "%s %s b=%d%d%d%d e=%d L=%d R=%d j=%d%s\r\n",
+                 MODE_NAME[mode], mode == MODE_AUTO ? STATE_NAME[astate] : "-",
+                 black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1,
+                 error, speed_l, speed_r, mode == MODE_SENSOR_TEST ? st_count : junction_index,
+                 inverted ? " WHITE" : "");
+        bt_print(s);
+    }
+}
+
+/* SENSOR TEST: push the robot along the track by hand; every wide patch
+ * (3+ sensors on black) is counted and reported, like junctions in AUTO. */
+static void sensor_test_step(uint32_t now)
+{
+    stop_motors();
+    uint8_t n = Robot_LineCount(black_bits);
+    static uint32_t st_t0;
+    static uint8_t  st_done;
+    if (n >= 3 && !st_wide) { st_wide = 1; st_t0 = now; st_done = 0; }
+    if (n >= 3 && st_wide && !st_done && now - st_t0 >= JUNCTION_MIN_MS) {   /* same rule as AUTO */
+        st_done = 1;
+        if (now - st_end_t >= JUNCTION_GAP_MS) {
+            st_count++;
+            log_msg("WIDE #%d b=%d%d%d%d\r\n", st_count,
+                    black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1);
+        }
+    } else if (n < 3 && st_wide) {
+        st_wide = 0; st_end_t = now;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -471,8 +1009,16 @@ void Robot_Init(void)
     /* The servo signal is NOT started here: the servo stays limp and
        silent until AUTO starts or you send a gate command.             */
     HAL_UART_Receive_IT(&huart3, &bt_byte, 1);
+#ifdef BT_NAME
+    bt_rename();                         /* before anything else is sent to the module */
+#endif
+    {   /* tell the Dabble app (if connected) that the robot is there: same frame as Dabble's library */
+        static const uint8_t hello[] = { 0xFF, 0x00, 0x01, 0x00, 0x00 };
+        bt_write(hello, sizeof hello);
+    }
     leds(1, 1, 1); HAL_Delay(300); leds(0, 0, 0);       /* "I'm alive" flash */
-    debug_print("\r\nAutocar ready v2. MODE button = change mode, START = go/stop, hold START = reset route\r\n");
+    if (rename_msg_ok == 0) { for (int i = 0; i < 6; i++) { leds(1, 1, 1); HAL_Delay(100); leds(0, 0, 0); HAL_Delay(100); } }  /* rename failed: 6 fast flashes */
+    debug_print("\r\nAutocar ready v3.8w2 (v3.8w + optional BT_NAME rename). MODE button = change mode, START = go/stop, hold START = reset route\r\n");
     loop_t = HAL_GetTick();
 }
 
@@ -507,6 +1053,8 @@ void Robot_Loop(void)
             mt_running = !mt_running; mt_t0 = now;
         } else if (mode == MODE_MANUAL) {
             stop_motors();
+        } else if (mode == MODE_SENSOR_TEST) {
+            st_count = 0; log_msg("SENSOR TEST: wide counter reset\r\n");
         }
     }
     if (btn_start.long_event) {
@@ -518,12 +1066,14 @@ void Robot_Loop(void)
     black_bits = read_black_bits();
     line_bits = inverted ? (uint8_t)(~black_bits & 0x0F) : black_bits;
 
-    /* 3. mode */
+    /* 3. Bluetooth (letters + Dabble app), then the mode */
+    if (bt_rearm && HAL_UART_Receive_IT(&huart3, &bt_byte, 1) == HAL_OK) bt_rearm = 0;
+    bt_poll(now);
     switch (mode) {
     case MODE_AUTO:        auto_step(now);       break;
     case MODE_MANUAL:      manual_step(now);     break;
     case MODE_MOTOR_TEST:  motor_test_step(now); break;
-    default:               stop_motors();        break;
+    default:               sensor_test_step(now); break;
     }
 
     /* 4-5. servo, LEDs, debug */
