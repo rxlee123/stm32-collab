@@ -6,6 +6,8 @@ typedef struct { int id; } GPIO_TypeDef;
 typedef enum { GPIO_PIN_RESET = 0, GPIO_PIN_SET } GPIO_PinState;
 typedef struct { int id; uint32_t ccr[5]; int pwm_on[5]; } TIM_HandleTypeDef;
 typedef struct { int id; } UART_HandleTypeDef;
+typedef struct { int id; } I2C_HandleTypeDef;
+#define I2C_MEMADD_SIZE_8BIT 1u
 extern GPIO_TypeDef GA, GB;
 #define GPIOA (&GA)
 #define GPIOB (&GB)
@@ -30,7 +32,14 @@ int HAL_UART_Transmit(UART_HandleTypeDef *h, uint8_t *d, uint16_t n, uint32_t t)
 int HAL_UART_Receive_IT(UART_HandleTypeDef *h, uint8_t *d, uint16_t n);
 int HAL_UART_Transmit_IT(UART_HandleTypeDef *h, const uint8_t *d, uint16_t n);
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *h);
-#define HAL_OK 0
+int HAL_I2C_Mem_Write(I2C_HandleTypeDef *hi2c, uint16_t DevAddress, uint16_t MemAddress,
+                      uint16_t MemAddSize, uint8_t *pData, uint16_t Size, uint32_t Timeout);
+int HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t DevAddress, uint16_t MemAddress,
+                     uint16_t MemAddSize, uint8_t *pData, uint16_t Size, uint32_t Timeout);
+#define HAL_OK      0
+#define HAL_ERROR   1
+#define HAL_BUSY    2
+#define HAL_TIMEOUT 3
 uint32_t HAL_GetTick(void);
 void HAL_Delay(uint32_t ms);
 #endif

@@ -84,11 +84,47 @@
 #ifndef DABBLE_TIMEOUT_MS
 #define DABBLE_TIMEOUT_MS     0
 #endif
+#ifndef AIROST_MODE
+#define AIROST_MODE           0
+#endif
+#ifndef COLOR_POLL_MS
+#define COLOR_POLL_MS        30
+#endif
+#ifndef COLOR_I2C_TIMEOUT_MS
+#define COLOR_I2C_TIMEOUT_MS  5
+#endif
+#ifndef COLOR_MIN_CLEAR
+#define COLOR_MIN_CLEAR      80
+#endif
+#ifndef COLOR_R_SCALE
+#define COLOR_R_SCALE       100
+#endif
+#ifndef COLOR_G_SCALE
+#define COLOR_G_SCALE       100
+#endif
+#ifndef COLOR_B_SCALE
+#define COLOR_B_SCALE       100
+#endif
+#ifndef COLOR_DOM_PCT
+#define COLOR_DOM_PCT       135
+#endif
+#ifndef COLOR_LOCK_SAMPLES
+#define COLOR_LOCK_SAMPLES    3
+#endif
+#ifndef AIROST_NEEDED_COLORS
+#define AIROST_NEEDED_COLORS  1
+#endif
+#ifndef ARRIVE_MM
+#define ARRIVE_MM             0
+#endif
 
 extern TIM_HandleTypeDef htim2;   /* motor PWM: CH1 = A0, CH4 = A3 */
 extern TIM_HandleTypeDef htim3;   /* servo PWM: CH4 = B1           */
 extern UART_HandleTypeDef huart1; /* USB-serial cable (debug)      */
 extern UART_HandleTypeDef huart3; /* Bluetooth module              */
+#if AIROST_MODE
+extern I2C_HandleTypeDef hi2c1;   /* TCS34725 colour sensor: PB6 SCL / PB7 SDA */
+#endif
 
 /* ------------------------------------------------------------------ */
 /*  Types and state                                                   */
@@ -106,17 +142,26 @@ typedef enum {
     AS_BLIND,         /* R_BLIND: straight, ignoring the sensors   */
     AS_PICKUP,        /* R_PICKUP: grab the cube and turn round    */
     AS_DROP           /* R_DROP: leave the cube and turn round     */
+#if AIROST_MODE
+    , AS_ARRIVE       /* AIROST: creep ARRIVE_MM at ball T-bar -> MANUAL */
+#endif
 } AutoState;
 
 static const char *MODE_NAME[MODE_COUNT] = { "AUTO", "MANUAL", "SENSOR", "MOTOR" };
 static const char *STATE_NAME[] = { "IDLE", "FOLLOW", "WIDE", "CROSS", "TURN", "LOST", "FINISH",
-                                     "BLIND", "PICKUP", "DROP" };
+                                     "BLIND", "PICKUP", "DROP"
+#if AIROST_MODE
+                                     , "ARRIVE"
+#endif
+                                   };
+#if !AIROST_MODE
 static const char *ACT_NAME[] = { "FOLLOW", "LEFT", "RIGHT", "STRAIGHT", "FINISH",
                                   "INVERT", "BLIND", "OPEN", "PICKUP", "DROP" };
 
 static const RouteStep route[] = ROUTE_LIST;
-static const uint32_t invert_ms = WIDE_TO_INVERT_MS;   /* automatic colour swap time, 0 = off */
 #define ROUTE_LEN ((int)(sizeof(route) / sizeof(route[0])))
+#endif
+static const uint32_t invert_ms = WIDE_TO_INVERT_MS;   /* automatic colour swap time, 0 = off */
 
 typedef struct {
     GPIO_TypeDef *port; uint16_t pin;
@@ -177,6 +222,38 @@ static uint32_t loop_t, print_t, bt_status_t;
 static int      st_count;            /* SENSOR TEST: wide patches counted (for mapping junctions by hand) */
 static uint8_t  st_wide;
 static uint32_t st_end_t;
+
+#if AIROST_MODE
+/* ---- TCS34725 colour sensor (I2C1, 7-bit 0x29 -> HAL 0x52) ---- */
+typedef enum { COLOR_NONE = 0, COLOR_RED, COLOR_BLUE, COLOR_GREEN } DetectedColor;
+typedef enum { CP_WHITE = 0, CP_CANDIDATE, CP_LOCKED } ColorPatchState;
+typedef enum { AIROST_SEEK_BALL = 0, AIROST_ON_BALL_BRANCH } AirostPhase;
+static const char *COLOR_NAME[] = { "NONE", "RED", "BLUE", "GREEN" };
+
+#define TCS_ADDR_8BIT     (0x29u << 1)
+#define TCS_CMD_BYTE      0x80u
+#define TCS_CMD_AUTO_INC  0xA0u
+#define TCS_REG_ENABLE    0x00u
+#define TCS_REG_ATIME     0x01u
+#define TCS_REG_CONTROL   0x0Fu
+#define TCS_REG_CDATAL    0x14u
+
+static uint8_t         tcs_ok;
+static uint8_t         tcs_err;
+static uint32_t        color_poll_t;
+static uint16_t        raw_r, raw_g, raw_b, raw_c;
+static uint16_t        norm_r, norm_g, norm_b;
+static int             color_dom_pct;
+static DetectedColor   color_now;
+static DetectedColor   color_slots[3];
+static uint8_t         color_count;
+static ColorPatchState color_patch_state;
+static DetectedColor   color_cand;
+static uint8_t         color_cand_hits;
+static AirostPhase     airost_phase;
+static uint8_t         airost_ball_count;
+static int8_t          wide_entry_side;   /* -1 left-first, +1 right-only, 0 simultaneous */
+#endif
 
 /* ------------------------------------------------------------------ */
 /*  Small helpers                                                     */
@@ -333,6 +410,147 @@ static void button_update(Button *b, uint32_t now)
 /* ------------------------------------------------------------------ */
 /*  Line sensors                                                      */
 /* ------------------------------------------------------------------ */
+#if AIROST_MODE
+static int tcs_write_reg(uint8_t reg, uint8_t val)
+{
+    return HAL_I2C_Mem_Write(&hi2c1, TCS_ADDR_8BIT, (uint16_t)(TCS_CMD_BYTE | reg),
+                             I2C_MEMADD_SIZE_8BIT, &val, 1, COLOR_I2C_TIMEOUT_MS) == HAL_OK;
+}
+
+static int tcs_init(void)
+{
+    /* ATIME = 0xF6 (~24 ms continuous integration), CONTROL = 0x01 (4x gain), ENABLE = PON | AEN */
+    if (!tcs_write_reg(TCS_REG_ATIME, 0xF6u) ||
+        !tcs_write_reg(TCS_REG_CONTROL, 0x01u) ||
+        !tcs_write_reg(TCS_REG_ENABLE, 0x03u)) {
+        tcs_ok = 0;
+        tcs_err = 1;
+        return 0;
+    }
+    tcs_ok = 1;
+    tcs_err = 0;
+    return 1;
+}
+
+static DetectedColor color_classify(uint16_t r, uint16_t g, uint16_t b, uint16_t c,
+                                    uint16_t *out_rn, uint16_t *out_gn, uint16_t *out_bn, int *out_dom)
+{
+    if (c < COLOR_MIN_CLEAR) {
+        *out_rn = *out_gn = *out_bn = 0;
+        *out_dom = 0;
+        return COLOR_NONE;
+    }
+    uint32_t rn = ((uint32_t)r * 1000u / c) * (uint32_t)COLOR_R_SCALE / 100u;
+    uint32_t gn = ((uint32_t)g * 1000u / c) * (uint32_t)COLOR_G_SCALE / 100u;
+    uint32_t bn = ((uint32_t)b * 1000u / c) * (uint32_t)COLOR_B_SCALE / 100u;
+    *out_rn = (uint16_t)rn;
+    *out_gn = (uint16_t)gn;
+    *out_bn = (uint16_t)bn;
+
+    uint32_t top, second;
+    DetectedColor cand;
+    if (rn >= gn && rn >= bn) {
+        top = rn; second = gn > bn ? gn : bn; cand = COLOR_RED;
+    } else if (gn >= rn && gn >= bn) {
+        top = gn; second = rn > bn ? rn : bn; cand = COLOR_GREEN;
+    } else {
+        top = bn; second = rn > gn ? rn : gn; cand = COLOR_BLUE;
+    }
+
+    if (top == 0) { *out_dom = 0; return COLOR_NONE; }
+    if (second == 0) { *out_dom = 999; return cand; }
+    *out_dom = (int)(top * 100u / second);
+    return (top * 100u >= second * (uint32_t)COLOR_DOM_PCT) ? cand : COLOR_NONE;
+}
+
+static int tcs_poll(uint32_t now)
+{
+    if (now - color_poll_t < COLOR_POLL_MS) return 0;
+    color_poll_t = now;
+    if (!tcs_ok && !tcs_init()) { color_now = COLOR_NONE; return 0; }
+
+    uint8_t buf[8];
+    if (HAL_I2C_Mem_Read(&hi2c1, TCS_ADDR_8BIT, (uint16_t)(TCS_CMD_AUTO_INC | TCS_REG_CDATAL),
+                         I2C_MEMADD_SIZE_8BIT, buf, 8, COLOR_I2C_TIMEOUT_MS) != HAL_OK) {
+        tcs_err = 1;
+        color_now = COLOR_NONE;
+        return 0;
+    }
+    tcs_err = 0;
+    raw_c = (uint16_t)(buf[0] | ((uint16_t)buf[1] << 8));
+    raw_r = (uint16_t)(buf[2] | ((uint16_t)buf[3] << 8));
+    raw_g = (uint16_t)(buf[4] | ((uint16_t)buf[5] << 8));
+    raw_b = (uint16_t)(buf[6] | ((uint16_t)buf[7] << 8));
+    color_now = color_classify(raw_r, raw_g, raw_b, raw_c, &norm_r, &norm_g, &norm_b, &color_dom_pct);
+    return 1;
+}
+
+static int color_to_ball(DetectedColor c)
+{
+    if (c == COLOR_RED)   return 1;
+    if (c == COLOR_BLUE)  return 2;
+    if (c == COLOR_GREEN) return 3;
+    return 0;
+}
+
+static void airost_reset(void)
+{
+    color_slots[0] = color_slots[1] = color_slots[2] = COLOR_NONE;
+    color_count = 0;
+    color_patch_state = CP_WHITE;
+    color_cand = COLOR_NONE;
+    color_cand_hits = 0;
+    airost_phase = AIROST_SEEK_BALL;
+    airost_ball_count = 0;
+    wide_entry_side = 0;
+}
+
+static void airost_record_color(DetectedColor c)
+{
+    if (color_count < 3) color_slots[color_count++] = c;
+    color_patch_state = CP_LOCKED;
+    log_msg("COLOR LOCKED: %s -> BALL %d (rn=%u gn=%u bn=%u C=%u)\r\n",
+            COLOR_NAME[c], color_to_ball(c), norm_r, norm_g, norm_b, raw_c);
+}
+
+static void airost_color_step(uint32_t now)
+{
+    uint8_t needed = (AIROST_NEEDED_COLORS < 1) ? 1 : (AIROST_NEEDED_COLORS > 3 ? 3 : AIROST_NEEDED_COLORS);
+    if (color_count >= needed) return;
+    if (!tcs_poll(now)) return;
+
+    switch (color_patch_state) {
+    case CP_WHITE:
+        if (color_now != COLOR_NONE) {
+            color_cand = color_now;
+            color_cand_hits = 1;
+            if (color_cand_hits >= COLOR_LOCK_SAMPLES) airost_record_color(color_cand);
+            else color_patch_state = CP_CANDIDATE;
+        }
+        break;
+    case CP_CANDIDATE:
+        if (color_now == COLOR_NONE) {
+            color_patch_state = CP_WHITE;
+            color_cand = COLOR_NONE;
+            color_cand_hits = 0;
+        } else if (color_now == color_cand) {
+            color_cand_hits++;
+            if (color_cand_hits >= COLOR_LOCK_SAMPLES) airost_record_color(color_cand);
+        } else {
+            color_cand = color_now;
+            color_cand_hits = 1;
+        }
+        break;
+    case CP_LOCKED:
+        if (color_now == COLOR_NONE) {
+            color_patch_state = CP_WHITE;
+            color_cand = COLOR_NONE;
+            color_cand_hits = 0;
+        }
+        break;
+    }
+}
+#endif
 static uint8_t read_black_bits(void)
 {
     uint8_t lvl = SENSOR_BLACK_LEVEL ? 1 : 0, b = 0;
@@ -417,6 +635,15 @@ static void seek_line(uint32_t now)
     auto_enter(AS_FOLLOW, now);
 }
 
+static void auto_reset_state(void)
+{
+    junction_index = 0; inverted = 0; finish_armed = 0;
+#if AIROST_MODE
+    airost_reset();
+#endif
+}
+
+#if !AIROST_MODE
 /* Words that act the MOMENT the wide patch starts (no waiting for it to end) */
 static int act_is_instant(uint8_t a)
 {
@@ -473,6 +700,58 @@ static void start_junction_action(uint32_t now)
         break;
     }
 }
+#else
+static void airost_complete_arrival(uint32_t now)
+{
+    int ball = airost_ball_count;
+    brake();
+    log_msg("ARRIVED ball %d -> MANUAL\r\n", ball);
+    auto_enter(AS_IDLE, now);
+    auto_reset_state();
+    bt_last = now;
+    mode = MODE_MANUAL;
+}
+
+static void start_junction_action(uint32_t now)
+{
+    last_junc_t = now;
+    if (airost_phase == AIROST_SEEK_BALL) {
+        if (wide_entry_side > 0) {
+            log_msg("J-skip RIGHT corner (R_FOLLOW) b=%d%d%d%d\r\n",
+                    black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1);
+            auto_enter(AS_FOLLOW, now);
+            return;
+        }
+        int target = (color_count > 0) ? color_to_ball(color_slots[0]) : 0;
+        if (target == 0) {
+            brake();
+            auto_enter(AS_LOST, now);
+            debug_print("NO COLOR: stopped at ball 1\r\n");
+            return;
+        }
+        airost_ball_count++;
+        junction_index = airost_ball_count;
+        if (airost_ball_count < target) {
+            log_msg("J%d STRAIGHT (target ball %d)\r\n", airost_ball_count, target);
+            auto_enter(AS_CROSS, now);
+        } else {
+            log_msg("J%d LEFT -> ball %d\r\n", airost_ball_count, target);
+            turn_dir = -1;
+            turn_left_line = 0;
+            airost_phase = AIROST_ON_BALL_BRANCH;
+            auto_enter(AS_TURN, now);
+        }
+        return;
+    }
+    /* AIROST_ON_BALL_BRANCH: end T-bar reached */
+    if (ARRIVE_MM > 0) {
+        seq_ms = mm_to_ms(ARRIVE_MM);
+        auto_enter(AS_ARRIVE, now);
+    } else {
+        airost_complete_arrival(now);
+    }
+}
+#endif
 
 /* Next step of PICKUP / DROP: restart the step timer */
 static void seq_next(uint32_t now) { seq_phase++; state_t0 = now; }
@@ -480,6 +759,9 @@ static void seq_next(uint32_t now) { seq_phase++; state_t0 = now; }
 static void auto_step(uint32_t now)
 {
     uint8_t n = Robot_LineCount(line_bits);
+#if AIROST_MODE
+    uint32_t prev_left_t = left_seen_t, prev_right_t = right_seen_t;
+#endif
     /* corner memory: when did a FAR sensor last see the line (in every state, junctions too) */
     if (line_bits & 1) left_seen_t = now;
     if (line_bits & 8) right_seen_t = now;
@@ -502,6 +784,16 @@ static void auto_step(uint32_t now)
                 return;
             }
             wide_nocount = (now - last_junc_t < JUNCTION_GAP_MS);   /* same junction again: don't count twice */
+#if AIROST_MODE
+            if ((line_bits & 1) && !(line_bits & 8))      wide_entry_side = -1;
+            else if ((line_bits & 8) && !(line_bits & 1)) wide_entry_side = 1;
+            else {
+                uint32_t l = now - prev_left_t, r = now - prev_right_t;
+                if (r < BEND_MEMORY_MS && (l >= BEND_MEMORY_MS || r + 10 < l))      wide_entry_side = 1;
+                else if (l < BEND_MEMORY_MS && (r >= BEND_MEMORY_MS || l + 10 < r)) wide_entry_side = -1;
+                else                                                                wide_entry_side = 0;
+            }
+#endif
             auto_enter(AS_WIDE, now);
             wide_all_t = now;
             drive(BASE_SPEED, BASE_SPEED);
@@ -582,11 +874,19 @@ static void auto_step(uint32_t now)
     case AS_WIDE:
         if (line_bits != 0xF) wide_all_t = now;     /* safety timer counts only while ALL 4 see black */
         if (n >= 3) {
+#if !AIROST_MODE
             /* words that act at once (INVERT, BLIND, PICKUP, DROP): as soon as the patch is a real one */
             if (!wide_nocount && act_is_instant(next_step().act) && now - state_t0 >= JUNCTION_MIN_MS) {
                 start_junction_action(now);
                 return;
             }
+#else
+            /* On a ball branch, the end T-bar acts immediately once confirmed (>= JUNCTION_MIN_MS) */
+            if (!wide_nocount && airost_phase == AIROST_ON_BALL_BRANCH && now - state_t0 >= JUNCTION_MIN_MS) {
+                start_junction_action(now);
+                return;
+            }
+#endif
             /* keep steering while on the wide patch (a line under 3 sensors when slightly
              * off-centre must still be followed); a full crossing (1111) steers straight */
             error = Robot_LineError(line_bits, error);
@@ -665,6 +965,12 @@ static void auto_step(uint32_t now)
                 break;
         }
         return;
+#if AIROST_MODE
+    case AS_ARRIVE:
+        drive(BASE_SPEED, BASE_SPEED);
+        if (now - state_t0 >= seq_ms) airost_complete_arrival(now);
+        return;
+#endif
     }
 }
 
@@ -676,14 +982,18 @@ static void auto_start(uint32_t now)
     last_junc_t = now - JUNCTION_GAP_MS;
     ramp_t0 = now; ramp_on = (ramp_ms > 0);
     last_error = error = 0;
+#if AIROST_MODE
+    servo_set(SERVO_OPEN_US);
+#else
     servo_set(SERVO_AUTO_US);
+#endif
     auto_enter(AS_FOLLOW, now);
     debug_print("AUTO: GO\r\n");
 }
 
 static void auto_reset_route(void)
 {
-    junction_index = 0; inverted = 0; finish_armed = 0;
+    auto_reset_state();
     debug_print("AUTO: route reset to the Start Zone\r\n");
 }
 
@@ -942,7 +1252,11 @@ static void update_leds(uint32_t now)
         case AS_IDLE:     leds(1, 0, 0); break;                    /* ready              */
         case AS_LOST:     leds(blink, blink, blink); break;        /* all blinking       */
         case AS_FINISHED: leds(1, 1, 1); break;                    /* all on             */
+#if AIROST_MODE
+        default:          leds(blink, 0, color_count > 0); break;  /* running; LED3 = colour locked */
+#else
         default:          leds(blink, 0, inverted); break;         /* running; LED3 = white-line mode */
+#endif
         }
     } else if (mode == MODE_MANUAL)      leds(0, 1, 0);
     else if (mode == MODE_SENSOR_TEST)   leds(0, 0, 1);
@@ -971,7 +1285,25 @@ static void print_status(uint32_t now)
                  error, speed_l, speed_r, mode == MODE_SENSOR_TEST ? st_count : junction_index,
                  inverted ? " WHITE" : "");
         bt_print(s);
+#if AIROST_MODE
+        if (mode == MODE_SENSOR_TEST) {
+            if (tcs_err) snprintf(s, sizeof s, "COLOR ERR (I2C)\r\n");
+            else snprintf(s, sizeof s, "COLOR %s R=%u G=%u B=%u C=%u rn=%u gn=%u bn=%u dom=%d%%\r\n",
+                          COLOR_NAME[color_now], raw_r, raw_g, raw_b, raw_c,
+                          norm_r, norm_g, norm_b, color_dom_pct);
+            bt_print(s);
+        }
+#endif
     }
+#if AIROST_MODE
+    if (mode == MODE_SENSOR_TEST) {
+        if (tcs_err) snprintf(s, sizeof s, "COLOR ERR (I2C)\r\n");
+        else snprintf(s, sizeof s, "COLOR %s R=%u G=%u B=%u C=%u rn=%u gn=%u bn=%u dom=%d%%\r\n",
+                      COLOR_NAME[color_now], raw_r, raw_g, raw_b, raw_c,
+                      norm_r, norm_g, norm_b, color_dom_pct);
+        HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), 20);
+    }
+#endif
 }
 
 /* SENSOR TEST: push the robot along the track by hand; every wide patch
@@ -1019,6 +1351,10 @@ void Robot_Init(void)
     leds(1, 1, 1); HAL_Delay(300); leds(0, 0, 0);       /* "I'm alive" flash */
     if (rename_msg_ok == 0) { for (int i = 0; i < 6; i++) { leds(1, 1, 1); HAL_Delay(100); leds(0, 0, 0); HAL_Delay(100); } }  /* rename failed: 6 fast flashes */
     debug_print("\r\nAutocar ready v3.8w2 (v3.8w + optional BT_NAME rename). MODE button = change mode, START = go/stop, hold START = reset route\r\n");
+#if AIROST_MODE
+    if (!tcs_init()) debug_print("TCS34725 init failed (I2C error)\r\n");
+    color_poll_t = HAL_GetTick() - COLOR_POLL_MS;
+#endif
     loop_t = HAL_GetTick();
 }
 
@@ -1065,6 +1401,10 @@ void Robot_Loop(void)
     /* 2. sensors */
     black_bits = read_black_bits();
     line_bits = inverted ? (uint8_t)(~black_bits & 0x0F) : black_bits;
+#if AIROST_MODE
+    if (mode == MODE_SENSOR_TEST) (void)tcs_poll(now);
+    else if (mode == MODE_AUTO && running && seen_line) airost_color_step(now);
+#endif
 
     /* 3. Bluetooth (letters + Dabble app), then the mode */
     if (bt_rearm && HAL_UART_Receive_IT(&huart3, &bt_byte, 1) == HAL_OK) bt_rearm = 0;

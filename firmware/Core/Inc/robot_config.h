@@ -178,4 +178,42 @@
 #define BT_STATUS_MS          250   /* how often the short status line goes to the phone */
 #define LOOP_MS                 2   /* control loop period */
 
+/* ---------------- AIROST MODE & TCS34725 COLOUR SENSOR ----------------
+ * AIROST_MODE = 1: side-mounted TCS34725 on I2C1 (PB6 SCL / PB7 SDA, 100 kHz, LED always ON)
+ *   detects Red -> ball 1, Blue -> ball 2, Green -> ball 3 on Figure 1 and auto-switches to MANUAL.
+ * AIROST_MODE = 0: original UTM Robocon Autocar ROUTE_LIST mode (I2C1 not required). */
+#ifndef AIROST_MODE
+#define AIROST_MODE            1
+#endif
+#ifndef COLOR_POLL_MS
+#define COLOR_POLL_MS         30   /* non-blocking poll period (ms); ATIME = 24 ms continuous integration */
+#endif
+#ifndef COLOR_I2C_TIMEOUT_MS
+#define COLOR_I2C_TIMEOUT_MS   5   /* short I2C timeout (ms) so the 2 ms IR loop is never blocked */
+#endif
+#ifndef COLOR_MIN_CLEAR
+#define COLOR_MIN_CLEAR       80   /* clear readings below this = black tape / lifted off floor (ignored) */
+#endif
+#ifndef COLOR_R_SCALE
+#define COLOR_R_SCALE        100   /* white-balance channel trims (%) - tune in SENSOR TEST */
+#endif
+#ifndef COLOR_G_SCALE
+#define COLOR_G_SCALE        100
+#endif
+#ifndef COLOR_B_SCALE
+#define COLOR_B_SCALE        100
+#endif
+#ifndef COLOR_DOM_PCT
+#define COLOR_DOM_PCT        135   /* strongest channel must beat 2nd-strongest by this % (rejects white/grey) */
+#endif
+#ifndef COLOR_LOCK_SAMPLES
+#define COLOR_LOCK_SAMPLES     3   /* consecutive matching samples (~90 ms) to lock a colour */
+#endif
+#ifndef AIROST_NEEDED_COLORS
+#define AIROST_NEEDED_COLORS   1   /* 1 = Basic (1 square), up to 3 = Advanced (3 squares) */
+#endif
+#ifndef ARRIVE_MM
+#define ARRIVE_MM              0   /* optional creep distance (mm) at ball T-bar before braking -> MANUAL */
+#endif
+
 #endif
