@@ -238,7 +238,7 @@ static const char *COLOR_NAME[] = { "NONE", "RED", "BLUE", "GREEN" };
 #define TCS_REG_CONTROL   0x0Fu
 #define TCS_REG_CDATAL    0x14u
 
-static uint8_t         tcs_ok;
+static uint8_t         tcs_inited;
 static uint8_t         tcs_err;
 static uint32_t        color_poll_t;
 static uint16_t        raw_r, raw_g, raw_b, raw_c;
@@ -423,11 +423,11 @@ static int tcs_init(void)
     if (!tcs_write_reg(TCS_REG_ATIME, 0xF6u) ||
         !tcs_write_reg(TCS_REG_CONTROL, 0x01u) ||
         !tcs_write_reg(TCS_REG_ENABLE, 0x03u)) {
-        tcs_ok = 0;
+        tcs_inited = 0;
         tcs_err = 1;
         return 0;
     }
-    tcs_ok = 1;
+    tcs_inited = 1;
     tcs_err = 0;
     return 1;
 }
@@ -467,11 +467,12 @@ static int tcs_poll(uint32_t now)
 {
     if (now - color_poll_t < COLOR_POLL_MS) return 0;
     color_poll_t = now;
-    if (!tcs_ok && !tcs_init()) { color_now = COLOR_NONE; return 0; }
+    if (!tcs_inited && !tcs_init()) { color_now = COLOR_NONE; return 0; }
 
     uint8_t buf[8];
     if (HAL_I2C_Mem_Read(&hi2c1, TCS_ADDR_8BIT, (uint16_t)(TCS_CMD_AUTO_INC | TCS_REG_CDATAL),
                          I2C_MEMADD_SIZE_8BIT, buf, 8, COLOR_I2C_TIMEOUT_MS) != HAL_OK) {
+        tcs_inited = 0; /* re-initialize sensor if bus/power recovers */
         tcs_err = 1;
         color_now = COLOR_NONE;
         return 0;
@@ -759,9 +760,6 @@ static void seq_next(uint32_t now) { seq_phase++; state_t0 = now; }
 static void auto_step(uint32_t now)
 {
     uint8_t n = Robot_LineCount(line_bits);
-#if AIROST_MODE
-    uint32_t prev_left_t = left_seen_t, prev_right_t = right_seen_t;
-#endif
     /* corner memory: when did a FAR sensor last see the line (in every state, junctions too) */
     if (line_bits & 1) left_seen_t = now;
     if (line_bits & 8) right_seen_t = now;
@@ -785,14 +783,9 @@ static void auto_step(uint32_t now)
             }
             wide_nocount = (now - last_junc_t < JUNCTION_GAP_MS);   /* same junction again: don't count twice */
 #if AIROST_MODE
-            if ((line_bits & 1) && !(line_bits & 8))      wide_entry_side = -1;
-            else if ((line_bits & 8) && !(line_bits & 1)) wide_entry_side = 1;
-            else {
-                uint32_t l = now - prev_left_t, r = now - prev_right_t;
-                if (r < BEND_MEMORY_MS && (l >= BEND_MEMORY_MS || r + 10 < l))      wide_entry_side = 1;
-                else if (l < BEND_MEMORY_MS && (r >= BEND_MEMORY_MS || l + 10 < r)) wide_entry_side = -1;
-                else                                                                wide_entry_side = 0;
-            }
+            /* Right-only entry (S3 on, S0 off -> e.g. 0111 at a 90 deg right corner) = +1 (R_FOLLOW).
+             * Any entry with S0 on (1110 or 1111, even after 0011) = left/T ball junction (-1). */
+            wide_entry_side = ((line_bits & 8) && !(line_bits & 1)) ? 1 : -1;
 #endif
             auto_enter(AS_WIDE, now);
             wide_all_t = now;
@@ -924,6 +917,9 @@ static void auto_step(uint32_t now)
             if ((line_bits & 0x6) == 0) turn_left_line = 1;      /* centre sensors off the line */
         } else if (line_bits & 0x6) {                            /* centre sensor found a line */
             last_error = error = 0;
+#if AIROST_MODE
+            last_junc_t = now; /* ignore residual tee overlap right after turning onto a ball branch */
+#endif
             log_msg("  turn done\r\n");
             auto_enter(AS_FOLLOW, now);
         }
@@ -1263,6 +1259,16 @@ static void update_leds(uint32_t now)
     else                                 leds(1, 0, 1);
 }
 
+#if AIROST_MODE
+static void format_color_line(char *buf, size_t cap)
+{
+    if (tcs_err) snprintf(buf, cap, "COLOR ERR (I2C)\r\n");
+    else snprintf(buf, cap, "COLOR %s R=%u G=%u B=%u C=%u rn=%u gn=%u bn=%u dom=%d%%\r\n",
+                  COLOR_NAME[color_now], raw_r, raw_g, raw_b, raw_c,
+                  norm_r, norm_g, norm_b, color_dom_pct);
+}
+#endif
+
 static void print_status(uint32_t now)
 {
     if (!DEBUG_PRINT_MS || now - print_t < DEBUG_PRINT_MS) return;
@@ -1287,20 +1293,14 @@ static void print_status(uint32_t now)
         bt_print(s);
 #if AIROST_MODE
         if (mode == MODE_SENSOR_TEST) {
-            if (tcs_err) snprintf(s, sizeof s, "COLOR ERR (I2C)\r\n");
-            else snprintf(s, sizeof s, "COLOR %s R=%u G=%u B=%u C=%u rn=%u gn=%u bn=%u dom=%d%%\r\n",
-                          COLOR_NAME[color_now], raw_r, raw_g, raw_b, raw_c,
-                          norm_r, norm_g, norm_b, color_dom_pct);
+            format_color_line(s, sizeof s);
             bt_print(s);
         }
 #endif
     }
 #if AIROST_MODE
     if (mode == MODE_SENSOR_TEST) {
-        if (tcs_err) snprintf(s, sizeof s, "COLOR ERR (I2C)\r\n");
-        else snprintf(s, sizeof s, "COLOR %s R=%u G=%u B=%u C=%u rn=%u gn=%u bn=%u dom=%d%%\r\n",
-                      COLOR_NAME[color_now], raw_r, raw_g, raw_b, raw_c,
-                      norm_r, norm_g, norm_b, color_dom_pct);
+        format_color_line(s, sizeof s);
         HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), 20);
     }
 #endif

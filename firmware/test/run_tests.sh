@@ -9,3 +9,4 @@ gcc $T -DAIROST_MODE=0 test/test_motor_min.c Core/Src/robot.c -o test/run_motor 
 for m in 1 2 3 0; do gcc $T -DAIROST_MODE=0 '-DBT_NAME="Doomsday01"' -DMODULE_TYPE=$m test/test_rename.c Core/Src/robot.c -o test/run_rename && ./test/run_rename; done
 gcc $T -DAIROST_MODE=1 -DMOTOR_MIN=0 -DSTART_RAMP_MS=0 test/test_airost.c Core/Src/robot.c -o test/run_airost && ./test/run_airost
 gcc $T -DAIROST_MODE=1 -DMOTOR_MIN=0 -DSTART_RAMP_MS=0 -DARRIVE_MM=60 test/test_airost.c Core/Src/robot.c -o test/run_airost_creep && ./test/run_airost_creep
+gcc $T -DAIROST_MODE=1 -DMOTOR_MIN=0 -DSTART_RAMP_MS=0 -DCOLOR_R_SCALE=150 -DAIROST_NEEDED_COLORS=3 test/test_airost.c Core/Src/robot.c -o test/run_airost_adv && ./test/run_airost_adv

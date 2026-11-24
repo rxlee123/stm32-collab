@@ -37,6 +37,15 @@ static void tcs_set_rgbc(uint16_t r, uint16_t g, uint16_t b, uint16_t c)
     tcs_regs[0x1A] = (uint8_t)(b & 0xFF); tcs_regs[0x1B] = (uint8_t)(b >> 8);
 }
 
+/* White mat reading that balances to neutral under the configured R/G/B white-balance trims */
+static void tcs_set_white(void)
+{
+    uint16_t r = (uint16_t)(500u * 100u / COLOR_R_SCALE);
+    uint16_t g = (uint16_t)(500u * 100u / COLOR_G_SCALE);
+    uint16_t b = (uint16_t)(500u * 100u / COLOR_B_SCALE);
+    tcs_set_rgbc(r, g, b, (uint16_t)(r + g + b));
+}
+
 int HAL_I2C_Mem_Write(I2C_HandleTypeDef *hi2c, uint16_t DevAddress, uint16_t MemAddress,
                       uint16_t MemAddSize, uint8_t *pData, uint16_t Size, uint32_t Timeout)
 {
@@ -175,7 +184,7 @@ static int fails = 0;
 int main(void)
 {
     /* Slice 1 (#3): TCS34725 init, 30 ms non-blocking poll, classifier, fault tolerance, SENSOR TEST */
-    tcs_set_rgbc(500, 500, 500, 1500); /* white floor */
+    tcs_set_white(); /* white floor */
     Robot_Init();
     printf("TCS34725 init & polling (#3):\n");
     CHECK(tcs_last_addr == (0x29u << 1), "I2C1 talks to TCS34725 at 7-bit 0x29 (HAL 0x52)");
@@ -194,7 +203,7 @@ int main(void)
     clear_logs();
     tcs_read_count = 0;
     tcs_min_read_gap = 999999;
-    tcs_set_rgbc(510, 495, 505, 1510);
+    tcs_set_white();
     run(350);
     CHECK(tcs_read_count >= 8 && tcs_min_read_gap >= COLOR_POLL_MS,
           "TCS34725 polled non-blockingly at >= COLOR_POLL_MS cadence");
@@ -234,7 +243,24 @@ int main(void)
     CHECK(tick - t_before == 350, "I2C timeout never stalls Robot_Loop");
     CHECK(strstr(log_txt, "COLOR ERR") != NULL && strstr(bt_txt, "COLOR ERR") != NULL,
           "I2C timeout reported as COLOR ERR on USB & BT");
-    tcs_force_err = 0;
+    /* Recovering from I2C fault re-initializes the sensor and resumes valid reads */
+    {
+        int writes_before = tcs_write_count;
+        tcs_force_err = 0;
+        tcs_set_rgbc(900, 220, 200, 1400);
+        clear_logs();
+        run(350);
+        CHECK(tcs_write_count > writes_before && strstr(log_txt, "COLOR RED") != NULL,
+              "TCS34725 re-initializes and recovers after transient I2C fault");
+    }
+#if COLOR_R_SCALE > 120
+    /* Non-100 white-balance trim check: neutral raw RGB gets boosted to RED by COLOR_R_SCALE */
+    clear_logs();
+    tcs_set_rgbc(420, 420, 420, 1260);
+    run(350);
+    CHECK(strstr(log_txt, "COLOR RED") != NULL,
+          "white-balance trim (COLOR_R_SCALE) shifts normalized channel ratio");
+#endif
 
     /* ---- Slice 2 (#5): AIROST AUTO latching, side-aware routing & NO COLOR failsafe ---- */
     return_to_auto_and_reset();
@@ -242,7 +268,7 @@ int main(void)
 
     /* Test A: NO COLOR failsafe (even after passing Figure 1's two 90 deg right corners) */
     clear_logs();
-    tcs_set_rgbc(500, 500, 500, 1500); /* white floor only */
+    tcs_set_white(); /* white floor only */
     set_black(0x6);
     press(GPIO_PIN_6, 80); /* START AUTO */
     run(200);
@@ -288,7 +314,7 @@ int main(void)
     /* Test C: Color latching requires 3 consecutive samples, ignores 2-sample glitch, RED -> Ball 1 */
     press(GPIO_PIN_6, LONG_PRESS_MS + 100);
     clear_logs();
-    tcs_set_rgbc(500, 500, 500, 1500);
+    tcs_set_white();
     set_black(0x0); /* start box (not yet seen_line) */
     press(GPIO_PIN_6, 80);
     /* Red shown BEFORE seen_line must NOT lock */
@@ -296,19 +322,19 @@ int main(void)
     run(120);
     CHECK(!led3() && strstr(log_txt, "COLOR LOCKED") == NULL,
           "color does NOT latch before line is acquired (seen_line == 0)");
-    tcs_set_rgbc(500, 500, 500, 1500);
+    tcs_set_white();
     set_black(0x6); run(SEEK_SETTLE_MS + 50); /* acquire line steadily */
     /* 2-sample glitch of BLUE (< 3 samples) must NOT lock */
     tcs_set_rgbc(150, 180, 700, 1100);
     run(COLOR_POLL_MS * 2);
-    tcs_set_rgbc(500, 500, 500, 1500);
+    tcs_set_white();
     run(COLOR_POLL_MS * 2);
     CHECK(!led3() && strstr(log_txt, "COLOR LOCKED") == NULL,
           "2-sample color glitch does NOT latch");
     /* 3 consecutive samples of RED -> locks Ball 1 */
     tcs_set_rgbc(900, 200, 200, 1400);
     run(COLOR_POLL_MS * 4);
-    tcs_set_rgbc(500, 500, 500, 1500);
+    tcs_set_white();
     run(COLOR_POLL_MS * 2);
     CHECK(led3() && strstr(log_txt, "COLOR LOCKED: RED -> BALL 1") != NULL
           && strstr(bt_txt, "COLOR LOCKED: RED -> BALL 1") != NULL,
@@ -319,22 +345,29 @@ int main(void)
     press(GPIO_PIN_6, 80); /* resume */
     run(20);
     CHECK(led3(), "resuming after short-press START preserves latched color (LED3 stays ON)");
-    /* Pass both 90 deg right corners, then hit Ball 1 (with 1110 -> 1111 drift) -> turns LEFT */
+    /* Pass both 90 deg right corners, then hit Ball 1 via 0011 -> 1111 (S3 active just prior) -> still counts Ball 1! */
     drive_right_corner();
     drive_right_corner();
-    drive_left_junction(1); /* drifted 1110 -> 1111 at Ball 1 */
-    CHECK(left() < 0 && right() > 0, "RED target turns LEFT at Ball 1 even with 1110->1111 drift");
-    set_black(0x0); run(60); set_black(0x2); run(20);
+    set_black(0xC); run(12); /* slightly left-of-center approach (S3 active) */
+    set_black(0xF); run(40); /* left branch hits S0+S1 -> 1111 */
+    set_black(0x6); run(10);
+    CHECK(left() < 0 && right() > 0, "RED target turns LEFT at Ball 1 even on 0011->1111 entry");
+    set_black(0x0); run(200); set_black(0x2); run(20); /* long spin > JUNCTION_GAP_MS */
     CHECK(strstr(log_txt, "turn done") != NULL, "RED turn completes onto Ball 1 branch");
+    /* Residual tee overlap immediately after turn done must NOT trigger premature arrival */
+    clear_logs();
+    set_black(0xF); run(30); set_black(0x6); run(20);
+    CHECK(strstr(log_txt, "ARRIVED") == NULL && left() > 0 && right() > 0,
+          "post-turn junction tee overlap within JUNCTION_GAP_MS does NOT prematurely arrive");
 
     /* Test D: BLUE -> crosses Ball 1, turns LEFT at Ball 2 */
     press(GPIO_PIN_6, 80); /* stop */
     press(GPIO_PIN_6, LONG_PRESS_MS + 100); /* reset */
     clear_logs();
-    tcs_set_rgbc(500, 500, 500, 1500);
+    tcs_set_white();
     set_black(0x6); press(GPIO_PIN_6, 80); run(60);
     tcs_set_rgbc(140, 180, 680, 1050); run(COLOR_POLL_MS * 4);
-    tcs_set_rgbc(500, 500, 500, 1500); run(COLOR_POLL_MS * 2);
+    tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(strstr(log_txt, "COLOR LOCKED: BLUE -> BALL 2") != NULL, "BLUE locks Ball 2");
     drive_right_corner();
     drive_right_corner();
@@ -348,10 +381,10 @@ int main(void)
     press(GPIO_PIN_6, 80); /* stop */
     press(GPIO_PIN_6, LONG_PRESS_MS + 100); /* reset */
     clear_logs();
-    tcs_set_rgbc(500, 500, 500, 1500);
+    tcs_set_white();
     set_black(0x6); press(GPIO_PIN_6, 80); run(60);
     tcs_set_rgbc(160, 640, 170, 1020); run(COLOR_POLL_MS * 4);
-    tcs_set_rgbc(500, 500, 500, 1500); run(COLOR_POLL_MS * 2);
+    tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(strstr(log_txt, "COLOR LOCKED: GREEN -> BALL 3") != NULL, "GREEN locks Ball 3");
     drive_right_corner();
     drive_right_corner();
@@ -392,14 +425,14 @@ int main(void)
     press(GPIO_PIN_7, 80); /* SENSOR -> MOTOR */
     press(GPIO_PIN_7, 80); /* MOTOR -> AUTO */
     clear_logs();
-    tcs_set_rgbc(500, 500, 500, 1500);
+    tcs_set_white();
     set_black(0x6);
     press(GPIO_PIN_6, 80); /* START AUTO directly (no long-press reset) */
     run(520); /* allow smooth servo ramp from CLOSED back to OPEN */
     CHECK(!led3() && htim3.ccr[4] == SERVO_OPEN_US,
           "next AUTO run starts reset (LED3 OFF, gripper OPEN) without manual long-press");
     tcs_set_rgbc(900, 200, 200, 1400); run(COLOR_POLL_MS * 4);
-    tcs_set_rgbc(500, 500, 500, 1500); run(COLOR_POLL_MS * 2);
+    tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(led3() && strstr(log_txt, "COLOR LOCKED: RED -> BALL 1") != NULL,
           "second run cleanly latches new random color RED -> BALL 1");
     drive_right_corner();
@@ -422,6 +455,25 @@ int main(void)
     CHECK(left() == MANUAL_SPEED_DEFAULT && right() == MANUAL_SPEED_DEFAULT,
           "Bluetooth letter command 'F' drives immediately after auto-MANUAL handoff");
     *rx_ptr = 'S'; HAL_UART_RxCpltCallback(&huart3); run(10);
+
+#if AIROST_NEEDED_COLORS == 3
+    /* Verify CP_LOCKED -> CP_WHITE re-arming collects 3 distinct patches in sequence */
+    printf("Advanced 3-slot patch queue (AIROST_NEEDED_COLORS=3):\n");
+    press(GPIO_PIN_7, 80); press(GPIO_PIN_7, 80); press(GPIO_PIN_7, 80); /* MANUAL -> AUTO */
+    clear_logs();
+    tcs_set_white(); set_black(0x6);
+    press(GPIO_PIN_6, 80); run(60);
+    tcs_set_rgbc(900, 200, 200, 1400); run(COLOR_POLL_MS * 4);
+    tcs_set_white(); run(COLOR_POLL_MS * 2);
+    tcs_set_rgbc(140, 180, 680, 1050); run(COLOR_POLL_MS * 4);
+    tcs_set_white(); run(COLOR_POLL_MS * 2);
+    tcs_set_rgbc(160, 640, 170, 1020); run(COLOR_POLL_MS * 4);
+    tcs_set_white(); run(COLOR_POLL_MS * 2);
+    CHECK(strstr(log_txt, "COLOR LOCKED: RED -> BALL 1") != NULL
+          && strstr(log_txt, "COLOR LOCKED: BLUE -> BALL 2") != NULL
+          && strstr(log_txt, "COLOR LOCKED: GREEN -> BALL 3") != NULL,
+          "3-slot patch queue locks RED, BLUE, and GREEN across white gaps");
+#endif
 
     printf("\n%s (%d failed)\n", fails ? "SOME TESTS FAILED" : "ALL TESTS PASSED", fails);
     return fails;
