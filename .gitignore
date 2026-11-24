@@ -14,3 +14,5 @@ Release/
 firmware/test/run
 firmware/test/run_route
 firmware/test/run_*
+# local scratch notes & exported docs
+.scratch/
