@@ -37,7 +37,7 @@
 
 /* Trim: the two motors are never exactly equal. Lower the STRONGER wheel's
  * value (in %) until the robot drives straight. Keep both at 100 or below. */
-#define LEFT_TRIM             90  /* left wheel was stronger on our robot (PROGRESS_LOG.md) */
+#define LEFT_TRIM            100  /* left wheel was stronger on our robot */
 #define RIGHT_TRIM           100
 
 #define PWM_MAX              999 /* = TIM2 Counter Period in CubeMX */
@@ -66,7 +66,7 @@
 #define TURN_FWD             0   /* pivot: outer wheel forward  */
 #define TURN_BACK            0   /* pivot: inner wheel backwards *//* ...and inner wheel BACKWARDS at this speed. Raise both = sharper turns */
 
-#define GAP_MS               800  /* line missing shorter than this = dashed gap: keep going straight.
+#define GAP_MS               600  /* line missing shorter than this = dashed gap: keep going straight.
                                      Raise it if the robot spins inside dashed-line gaps. */
 #define BEND_MEMORY_MS       150  /* line vanishes within this long after a FAR sensor saw it = a corner:
                                      spin towards it at once (0 = off)                              */
@@ -217,9 +217,6 @@
 #endif
 #ifndef TURN_MIN_MS
 #define TURN_MIN_MS          120   /* minimum spin time (ms) in AS_TURN before accepting a new line */
-#endif
-#ifndef GAP_BEND_DELAY_MS
-#define GAP_BEND_DELAY_MS     80   /* on a dotted gap without a wide corner, drive straight this long before BEND spin */
 #endif
 
 #endif

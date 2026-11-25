@@ -120,9 +120,6 @@
 #ifndef TURN_MIN_MS
 #define TURN_MIN_MS         120
 #endif
-#ifndef GAP_BEND_DELAY_MS
-#define GAP_BEND_DELAY_MS    80
-#endif
 
 extern TIM_HandleTypeDef htim2;   /* motor PWM: CH1 = A0, CH4 = A3 */
 extern TIM_HandleTypeDef htim3;   /* servo PWM: CH4 = B1           */
@@ -857,14 +854,6 @@ static void auto_step(uint32_t now)
                 return;
             }
             if (curve_side && t < SEARCH_MS) {  /* bend: turn towards the side it left from */
-#if AIROST_MODE
-                /* On a 1 cm dotted line, touching an outer sensor on a dash before a white gap
-                 * must not spin immediately: drive straight briefly unless we just left a wide 90 deg corner. */
-                if (GAP_BEND_DELAY_MS && t < GAP_BEND_DELAY_MS && (lost_t0 - wide_seen_t) >= BEND_MEMORY_MS) {
-                    drive(BASE_SPEED, BASE_SPEED);
-                    return;
-                }
-#endif
                 /* Spin, but drifting BACKWARDS by BEND_BACK: the robot has already rolled past the
                  * corner, and sensors close to the wheels only sweep a small circle when spinning
                  * on the spot, so they could miss every line (22 Nov video). Drifting back brings
