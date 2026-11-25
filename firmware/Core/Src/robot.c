@@ -109,7 +109,7 @@
 #define COLOR_DOM_PCT       135
 #endif
 #ifndef COLOR_LOCK_SAMPLES
-#define COLOR_LOCK_SAMPLES    3
+#define COLOR_LOCK_SAMPLES    5
 #endif
 #ifndef AIROST_NEEDED_COLORS
 #define AIROST_NEEDED_COLORS  1
@@ -248,6 +248,9 @@ static uint16_t        raw_r, raw_g, raw_b, raw_c;
 static uint16_t        norm_r, norm_g, norm_b;
 static int             color_dom_pct;
 static DetectedColor   color_now;
+static DetectedColor   color_stable;      /* debounced colour (COLOR_LOCK_SAMPLES consecutive hits) */
+static DetectedColor   color_st_cand;
+static uint8_t         color_st_hits;
 static DetectedColor   color_slots[3];
 static uint8_t         color_count;
 static ColorPatchState color_patch_state;
@@ -495,6 +498,18 @@ static int tcs_poll(uint32_t now)
     raw_g = (uint16_t)(buf[4] | ((uint16_t)buf[5] << 8));
     raw_b = (uint16_t)(buf[6] | ((uint16_t)buf[7] << 8));
     color_now = color_classify(raw_r, raw_g, raw_b, raw_c, &norm_r, &norm_g, &norm_b, &color_dom_pct);
+    if (color_now == COLOR_NONE) {
+        color_st_cand = COLOR_NONE;
+        color_st_hits = 0;
+        color_stable = COLOR_NONE;
+    } else if (color_now == color_st_cand) {
+        if (color_st_hits < 255) color_st_hits++;
+        if (color_st_hits >= COLOR_LOCK_SAMPLES) color_stable = color_st_cand;
+    } else {
+        color_st_cand = color_now;
+        color_st_hits = 1;
+        color_stable = (COLOR_LOCK_SAMPLES <= 1) ? color_st_cand : COLOR_NONE;
+    }
     return 1;
 }
 
@@ -1279,9 +1294,9 @@ static void update_leds(uint32_t now)
 static void format_color_line(char *buf, size_t cap)
 {
     if (tcs_err) snprintf(buf, cap, "COLOR ERR (I2C)\r\n");
-    else snprintf(buf, cap, "COLOR %s R=%u G=%u B=%u C=%u rn=%u gn=%u bn=%u dom=%d%%\r\n",
+    else snprintf(buf, cap, "COLOR %s R=%u G=%u B=%u C=%u rn=%u gn=%u bn=%u dom=%d%% lock=%s\r\n",
                   COLOR_NAME[color_now], raw_r, raw_g, raw_b, raw_c,
-                  norm_r, norm_g, norm_b, color_dom_pct);
+                  norm_r, norm_g, norm_b, color_dom_pct, COLOR_NAME[color_stable]);
 }
 #endif
 

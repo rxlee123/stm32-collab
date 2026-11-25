@@ -201,13 +201,13 @@
 #define COLOR_G_SCALE         98
 #endif
 #ifndef COLOR_B_SCALE
-#define COLOR_B_SCALE        152
+#define COLOR_B_SCALE        145
 #endif
 #ifndef COLOR_DOM_PCT
 #define COLOR_DOM_PCT        120   /* strongest channel must beat 2nd-strongest by this % (rejects white/grey) */
 #endif
 #ifndef COLOR_LOCK_SAMPLES
-#define COLOR_LOCK_SAMPLES     3   /* consecutive matching samples (~90 ms) to lock a colour */
+#define COLOR_LOCK_SAMPLES     5   /* consecutive matching samples (~150 ms) required to lock a colour */
 #endif
 #ifndef AIROST_NEEDED_COLORS
 #define AIROST_NEEDED_COLORS   1   /* 1 = Basic (1 square), up to 3 = Advanced (3 squares) */

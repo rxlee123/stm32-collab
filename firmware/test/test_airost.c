@@ -226,8 +226,9 @@ int main(void)
     tcs_set_rgbc(900, 220, 200, 1400);
     run(350);
     CHECK(strstr(log_txt, "COLOR RED") != NULL && strstr(bt_txt, "COLOR RED") != NULL
-          && strstr(log_txt, "dom=") != NULL && strstr(log_txt, "rn=") != NULL,
-          "RED patch prints COLOR RED with rn/gn/bn and dom% on USB & BT");
+          && strstr(log_txt, "dom=") != NULL && strstr(log_txt, "rn=") != NULL
+          && strstr(log_txt, "lock=RED") != NULL,
+          "RED patch prints COLOR RED with rn/gn/bn, dom%, and lock=RED on USB & BT");
 
     clear_logs();
     tcs_set_rgbc(140, 180, 620, 980);
@@ -328,21 +329,21 @@ int main(void)
           "color does NOT latch before line is acquired (seen_line == 0)");
     tcs_set_white();
     set_black(0x6); run(SEEK_SETTLE_MS + 50); /* acquire line steadily */
-    /* 2-sample glitch of BLUE (< 3 samples) must NOT lock */
+    /* Glitch shorter than COLOR_LOCK_SAMPLES (4 samples) must NOT lock */
     tcs_set_rgbc(150, 180, 700, 1100);
-    run(COLOR_POLL_MS * 2);
+    run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES - 1));
     tcs_set_white();
     run(COLOR_POLL_MS * 2);
     CHECK(!led3() && strstr(log_txt, "COLOR LOCKED") == NULL,
-          "2-sample color glitch does NOT latch");
-    /* 3 consecutive samples of RED -> locks Ball 1 */
+          "glitch shorter than COLOR_LOCK_SAMPLES does NOT latch");
+    /* COLOR_LOCK_SAMPLES consecutive samples of RED -> locks Ball 1 */
     tcs_set_rgbc(900, 200, 200, 1400);
-    run(COLOR_POLL_MS * 4);
+    run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white();
     run(COLOR_POLL_MS * 2);
     CHECK(led3() && strstr(log_txt, "COLOR LOCKED: RED -> BALL 1") != NULL
           && strstr(bt_txt, "COLOR LOCKED: RED -> BALL 1") != NULL,
-          "3 consecutive RED samples lock Ball 1, light LED3 solid ON, and log to USB & BT");
+          "COLOR_LOCK_SAMPLES consecutive RED samples lock Ball 1, light LED3 solid ON, and log to USB & BT");
     /* Short-press START pauses without wiping latched color */
     press(GPIO_PIN_6, 80); /* pause -> AS_IDLE */
     CHECK(left() == 0 && right() == 0, "short-press START pauses AUTO");
@@ -370,7 +371,7 @@ int main(void)
     clear_logs();
     tcs_set_white();
     set_black(0x6); press(GPIO_PIN_6, 80); run(60);
-    tcs_set_rgbc(140, 180, 680, 1050); run(COLOR_POLL_MS * 4);
+    tcs_set_rgbc(140, 180, 680, 1050); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(strstr(log_txt, "COLOR LOCKED: BLUE -> BALL 2") != NULL, "BLUE locks Ball 2");
     drive_right_corner();
@@ -387,7 +388,7 @@ int main(void)
     clear_logs();
     tcs_set_white();
     set_black(0x6); press(GPIO_PIN_6, 80); run(60);
-    tcs_set_rgbc(160, 640, 170, 1020); run(COLOR_POLL_MS * 4);
+    tcs_set_rgbc(160, 640, 170, 1020); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(strstr(log_txt, "COLOR LOCKED: GREEN -> BALL 3") != NULL, "GREEN locks Ball 3");
     drive_right_corner();
@@ -435,7 +436,7 @@ int main(void)
     run(520); /* allow smooth servo ramp from CLOSED back to OPEN */
     CHECK(!led3() && htim3.ccr[4] == SERVO_OPEN_US,
           "next AUTO run starts reset (LED3 OFF, gripper OPEN) without manual long-press");
-    tcs_set_rgbc(900, 200, 200, 1400); run(COLOR_POLL_MS * 4);
+    tcs_set_rgbc(900, 200, 200, 1400); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(led3() && strstr(log_txt, "COLOR LOCKED: RED -> BALL 1") != NULL,
           "second run cleanly latches new random color RED -> BALL 1");
@@ -467,11 +468,11 @@ int main(void)
     clear_logs();
     tcs_set_white(); set_black(0x6);
     press(GPIO_PIN_6, 80); run(60);
-    tcs_set_rgbc(900, 200, 200, 1400); run(COLOR_POLL_MS * 4);
+    tcs_set_rgbc(900, 200, 200, 1400); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
-    tcs_set_rgbc(140, 180, 680, 1050); run(COLOR_POLL_MS * 4);
+    tcs_set_rgbc(140, 180, 680, 1050); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
-    tcs_set_rgbc(160, 640, 170, 1020); run(COLOR_POLL_MS * 4);
+    tcs_set_rgbc(160, 640, 170, 1020); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(strstr(log_txt, "COLOR LOCKED: RED -> BALL 1") != NULL
           && strstr(log_txt, "COLOR LOCKED: BLUE -> BALL 2") != NULL
