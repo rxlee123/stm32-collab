@@ -218,5 +218,8 @@
 #ifndef TURN_MIN_MS
 #define TURN_MIN_MS          120   /* minimum spin time (ms) in AS_TURN before accepting a new line */
 #endif
+#ifndef GAP_BEND_DELAY_MS
+#define GAP_BEND_DELAY_MS     80   /* on a dotted gap without a wide corner, drive straight this long before BEND spin */
+#endif
 
 #endif

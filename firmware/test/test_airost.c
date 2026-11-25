@@ -279,6 +279,22 @@ int main(void)
     run(200);
     CHECK(htim3.pwm_on[4] && htim3.ccr[4] == SERVO_OPEN_US, "AIROST AUTO starts with gripper OPEN");
     CHECK(!led3(), "LED3 stays OFF before any color latches");
+    /* Dotted-line gap immunity: touching S3 on a dash (0011 -> 0000) drives straight across 1 cm gap */
+    set_black(0x6); run(200);
+    set_black(0xC); run(20);
+    set_black(0x0); run(40);
+    CHECK(left() == BASE_SPEED && right() == BASE_SPEED,
+          "dotted gap after S3 touch (0011 -> 0000) drives straight during GAP_BEND_DELAY_MS");
+    run(GAP_BEND_DELAY_MS);
+    CHECK(left() > 0 && right() < 0,
+          "real bend still spins right once GAP_BEND_DELAY_MS expires with no dash ahead");
+    set_black(0x6); run(200);
+    /* Wide 90 deg right corner (0111 -> 0000) still spins right immediately */
+    set_black(0xE); run(40);
+    set_black(0x0); run(20);
+    CHECK(left() > 0 && right() < 0,
+          "90 deg right corner (0111 -> 0000) still spins right immediately");
+    set_black(0x6); run(200);
     drive_right_corner();
     CHECK(left() > 0 && right() > 0 && strstr(log_txt, "NO COLOR") == NULL,
           "90 deg right corner #1 (0111) does NOT trigger NO COLOR or shift ball count");
