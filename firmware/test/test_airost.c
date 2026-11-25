@@ -23,7 +23,8 @@ static int bt_txt_n;
 static uint8_t tcs_regs[32];
 static int tcs_write_count;
 static int tcs_read_count;
-static uint32_t tcs_last_read_tick;
+static int tcs_max_read_size;
+static uint32_t tcs_last_poll_tick;
 static uint32_t tcs_min_read_gap = 999999;
 static uint32_t tcs_max_timeout_seen;
 static uint16_t tcs_last_addr;
@@ -67,15 +68,18 @@ int HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t DevAddress, uint16_t MemA
     (void)hi2c; (void)MemAddSize;
     tcs_last_addr = DevAddress;
     if (Timeout > tcs_max_timeout_seen) tcs_max_timeout_seen = Timeout;
-    if (tcs_read_count > 0) {
-        uint32_t gap = tick - tcs_last_read_tick;
-        if (gap < tcs_min_read_gap) tcs_min_read_gap = gap;
+    if ((int)Size > tcs_max_read_size) tcs_max_read_size = (int)Size;
+    uint8_t reg = (uint8_t)(MemAddress & 0x1Fu);
+    if (reg == 0x14u) {
+        if (tcs_read_count > 0) {
+            uint32_t gap = tick - tcs_last_poll_tick;
+            if (gap < tcs_min_read_gap) tcs_min_read_gap = gap;
+        }
+        tcs_last_poll_tick = tick;
+        tcs_read_count++;
     }
-    tcs_last_read_tick = tick;
-    tcs_read_count++;
     if (tcs_force_err) return tcs_force_err;
     if (DevAddress != (0x29u << 1)) return HAL_ERROR;
-    uint8_t reg = (uint8_t)(MemAddress & 0x1Fu);
     for (uint16_t i = 0; i < Size; i++)
         pData[i] = ((uint16_t)(reg + i) < sizeof tcs_regs) ? tcs_regs[reg + i] : 0;
     return HAL_OK;
@@ -189,7 +193,7 @@ int main(void)
     printf("TCS34725 init & polling (#3):\n");
     CHECK(tcs_last_addr == (0x29u << 1), "I2C1 talks to TCS34725 at 7-bit 0x29 (HAL 0x52)");
     CHECK(tcs_regs[0x01] == 0xF6u, "ATIME configured to 0xF6 (~24 ms continuous integration)");
-    CHECK(tcs_regs[0x0F] == 0x01u, "CONTROL configured to 0x01 (4x gain)");
+    CHECK(tcs_regs[0x0F] == 0x02u, "CONTROL configured to 0x02 (16x gain)");
     CHECK(tcs_regs[0x00] == 0x03u, "ENABLE configured to 0x03 (PON | AEN)");
     CHECK(tcs_max_timeout_seen > 0 && tcs_max_timeout_seen <= COLOR_I2C_TIMEOUT_MS,
           "all I2C calls use short non-blocking timeout (<= COLOR_I2C_TIMEOUT_MS)");
@@ -205,8 +209,8 @@ int main(void)
     tcs_min_read_gap = 999999;
     tcs_set_white();
     run(350);
-    CHECK(tcs_read_count >= 8 && tcs_min_read_gap >= COLOR_POLL_MS,
-          "TCS34725 polled non-blockingly at >= COLOR_POLL_MS cadence");
+    CHECK(tcs_read_count >= 8 && tcs_min_read_gap >= COLOR_POLL_MS && tcs_max_read_size == 1,
+          "TCS34725 polled non-blockingly at >= COLOR_POLL_MS using single-byte reads");
     CHECK(strstr(log_txt, "COLOR NONE") != NULL && strstr(bt_txt, "COLOR NONE") != NULL,
           "white floor prints COLOR NONE on both USB and Bluetooth");
 
@@ -399,7 +403,7 @@ int main(void)
 
     /* ---- Slice 3 (#6): Ball T-bar arrival, automatic MODE_MANUAL handoff & multi-run reset ---- */
     printf("Ball T-bar arrival, MODE_MANUAL handoff & multi-run reset (#6, ARRIVE_MM=%d):\n", ARRIVE_MM);
-    set_black(0x0); run(60); set_black(0x2); run(20); /* complete left turn onto Ball 3 branch */
+    set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20); /* complete left turn onto Ball 3 branch */
     set_black(0x6); run(220); /* drive along Ball 3 branch */
     clear_logs();
     set_black(0xF); run(JUNCTION_MIN_MS + 10); /* hit Ball 3 end T-bar */
@@ -439,7 +443,7 @@ int main(void)
     drive_right_corner();
     drive_left_junction(0); /* Ball 1 -> LEFT */
     CHECK(left() < 0 && right() > 0, "second run turns LEFT at Ball 1");
-    set_black(0x0); run(60); set_black(0x2); run(20);
+    set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20);
     set_black(0x6); run(220);
     clear_logs();
     /* Asymmetric T-bar hit (0111) on ball branch still triggers arrival */

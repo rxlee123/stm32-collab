@@ -117,6 +117,9 @@
 #ifndef ARRIVE_MM
 #define ARRIVE_MM             0
 #endif
+#ifndef TURN_MIN_MS
+#define TURN_MIN_MS         120
+#endif
 
 extern TIM_HandleTypeDef htim2;   /* motor PWM: CH1 = A0, CH4 = A3 */
 extern TIM_HandleTypeDef htim3;   /* servo PWM: CH4 = B1           */
@@ -417,11 +420,19 @@ static int tcs_write_reg(uint8_t reg, uint8_t val)
                              I2C_MEMADD_SIZE_8BIT, &val, 1, COLOR_I2C_TIMEOUT_MS) == HAL_OK;
 }
 
+static int tcs_read_reg(uint8_t reg, uint8_t *val)
+{
+    /* Single-byte I2C reads avoid the STM32F1/clone HAL multi-byte back-to-back DR bug
+     * that duplicated buf[6] into buf[7] (BDATAH = BDATAL). */
+    return HAL_I2C_Mem_Read(&hi2c1, TCS_ADDR_8BIT, (uint16_t)(TCS_CMD_BYTE | reg),
+                            I2C_MEMADD_SIZE_8BIT, val, 1, COLOR_I2C_TIMEOUT_MS) == HAL_OK;
+}
+
 static int tcs_init(void)
 {
-    /* ATIME = 0xF6 (~24 ms continuous integration), CONTROL = 0x01 (4x gain), ENABLE = PON | AEN */
+    /* ATIME = 0xF6 (~24 ms continuous integration), CONTROL = 0x02 (16x gain), ENABLE = PON | AEN */
     if (!tcs_write_reg(TCS_REG_ATIME, 0xF6u) ||
-        !tcs_write_reg(TCS_REG_CONTROL, 0x01u) ||
+        !tcs_write_reg(TCS_REG_CONTROL, 0x02u) ||
         !tcs_write_reg(TCS_REG_ENABLE, 0x03u)) {
         tcs_inited = 0;
         tcs_err = 1;
@@ -470,12 +481,13 @@ static int tcs_poll(uint32_t now)
     if (!tcs_inited && !tcs_init()) { color_now = COLOR_NONE; return 0; }
 
     uint8_t buf[8];
-    if (HAL_I2C_Mem_Read(&hi2c1, TCS_ADDR_8BIT, (uint16_t)(TCS_CMD_AUTO_INC | TCS_REG_CDATAL),
-                         I2C_MEMADD_SIZE_8BIT, buf, 8, COLOR_I2C_TIMEOUT_MS) != HAL_OK) {
-        tcs_inited = 0; /* re-initialize sensor if bus/power recovers */
-        tcs_err = 1;
-        color_now = COLOR_NONE;
-        return 0;
+    for (uint8_t i = 0; i < 8; i++) {
+        if (!tcs_read_reg((uint8_t)(TCS_REG_CDATAL + i), &buf[i])) {
+            tcs_inited = 0; /* re-initialize sensor if bus/power recovers */
+            tcs_err = 1;
+            color_now = COLOR_NONE;
+            return 0;
+        }
     }
     tcs_err = 0;
     raw_c = (uint16_t)(buf[0] | ((uint16_t)buf[1] << 8));
@@ -914,7 +926,11 @@ static void auto_step(uint32_t now)
         /* spin towards the branch: first leave the old line, then find the new one */
         drive(turn_dir * SEARCH_SPEED, -turn_dir * SEARCH_SPEED);
         if (!turn_left_line) {
+#if AIROST_MODE
+            if (now - state_t0 >= TURN_MIN_MS && (line_bits & 0x6) == 0) turn_left_line = 1;
+#else
             if ((line_bits & 0x6) == 0) turn_left_line = 1;      /* centre sensors off the line */
+#endif
         } else if (line_bits & 0x6) {                            /* centre sensor found a line */
             last_error = error = 0;
 #if AIROST_MODE

@@ -195,16 +195,16 @@
 #define COLOR_MIN_CLEAR       80   /* clear readings below this = black tape / lifted off floor (ignored) */
 #endif
 #ifndef COLOR_R_SCALE
-#define COLOR_R_SCALE        100   /* white-balance channel trims (%) - tune in SENSOR TEST */
+#define COLOR_R_SCALE         75   /* white-balance channel trims (%) calibrated for warm LED - tune in SENSOR TEST */
 #endif
 #ifndef COLOR_G_SCALE
-#define COLOR_G_SCALE        100
+#define COLOR_G_SCALE         98
 #endif
 #ifndef COLOR_B_SCALE
-#define COLOR_B_SCALE        100
+#define COLOR_B_SCALE        152
 #endif
 #ifndef COLOR_DOM_PCT
-#define COLOR_DOM_PCT        135   /* strongest channel must beat 2nd-strongest by this % (rejects white/grey) */
+#define COLOR_DOM_PCT        120   /* strongest channel must beat 2nd-strongest by this % (rejects white/grey) */
 #endif
 #ifndef COLOR_LOCK_SAMPLES
 #define COLOR_LOCK_SAMPLES     3   /* consecutive matching samples (~90 ms) to lock a colour */
@@ -214,6 +214,9 @@
 #endif
 #ifndef ARRIVE_MM
 #define ARRIVE_MM              0   /* optional creep distance (mm) at ball T-bar before braking -> MANUAL */
+#endif
+#ifndef TURN_MIN_MS
+#define TURN_MIN_MS          120   /* minimum spin time (ms) in AS_TURN before accepting a new line */
 #endif
 
 #endif
