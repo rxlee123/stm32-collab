@@ -279,6 +279,18 @@ int main(void)
     run(200);
     CHECK(htim3.pwm_on[4] && htim3.ccr[4] == SERVO_OPEN_US, "AIROST AUTO starts with gripper OPEN");
     CHECK(!led3(), "LED3 stays OFF before any color latches");
+    /* Regression (26 Nov log): long BEND right (> BEND_MEMORY_MS) + 1-tick brush of 0100 -> 0000
+     * must stay in BEND right instead of falsely dropping into GAP, straight */
+    clear_logs();
+    set_black(0x6); run(200);
+    set_black(0x8); run(20);
+    set_black(0x0); run(BEND_MEMORY_MS + 150); /* spinning right > BEND_MEMORY_MS */
+    set_black(0x2); run(6);                    /* brief brush of 0100 mid-corner */
+    set_black(0x0); run(20);                   /* off the line again */
+    CHECK(left() > 0 && right() < 0 && strstr(log_txt, "GAP, straight") == NULL,
+          "brief 0100 brush after long BEND right stays in BEND right (no false GAP straight)");
+    set_black(0x6); run(200);
+    clear_logs();
     drive_right_corner();
     CHECK(left() > 0 && right() > 0 && strstr(log_txt, "NO COLOR") == NULL,
           "90 deg right corner #1 (0111) does NOT trigger NO COLOR or shift ball count");

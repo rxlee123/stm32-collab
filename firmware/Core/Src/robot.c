@@ -854,6 +854,10 @@ static void auto_step(uint32_t now)
                 return;
             }
             if (curve_side && t < SEARCH_MS) {  /* bend: turn towards the side it left from */
+                /* Keep corner-side memory fresh while turning: a 1-tick brush of 0100/0010 mid-spin
+                 * must not expire BEND_MEMORY_MS and drop into GAP, straight (26 Nov log). */
+                if (curve_side > 0) right_seen_t = now;
+                else                left_seen_t  = now;
                 /* Spin, but drifting BACKWARDS by BEND_BACK: the robot has already rolled past the
                  * corner, and sensors close to the wheels only sweep a small circle when spinning
                  * on the spot, so they could miss every line (22 Nov video). Drifting back brings
