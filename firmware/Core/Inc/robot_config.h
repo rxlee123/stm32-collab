@@ -48,7 +48,7 @@
  * Find it: raise it until a wheel always turns in sharp corners; if the robot
  * jerks or is too fast in gentle steering, lower it. 0 = off.                */
 #ifndef MOTOR_MIN
-#define MOTOR_MIN            200
+#define MOTOR_MIN            300
 #endif
 
 /* ---------------- LINE FOLLOWING ----------------
