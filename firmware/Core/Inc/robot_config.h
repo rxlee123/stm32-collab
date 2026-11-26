@@ -48,12 +48,12 @@
  * Find it: raise it until a wheel always turns in sharp corners; if the robot
  * jerks or is too fast in gentle steering, lower it. 0 = off.                */
 #ifndef MOTOR_MIN
-#define MOTOR_MIN            280
+#define MOTOR_MIN            260
 #endif
 
 /* ---------------- LINE FOLLOWING ----------------
  * Speeds are 0..999 (999 = full power). Start slow, speed up later. */
-#define BASE_SPEED           220  /* straight-line speed                         */
+#define BASE_SPEED           180  /* straight-line speed (PWM ~393: slower for 90 deg corners, above stall) */
 #define MAX_SPEED            999  /* no wheel is ever driven faster than this    */
 #define KP                   40  /* how hard it steers back to the line (calm, low wobble) */
 #define KD                   200  /* damping: stops it wobbling left-right. Wobbles: raise. Jerky/twitchy: lower */
@@ -61,8 +61,8 @@
 #define CORNER_SLOW          30  /* slow BOTH wheels in bends: line 2 sensors off-centre = BASE_SPEED - 200.
                                      Raise if it runs wide on bends, 0 = off */
 #define SEARCH_SPEED         200  /* spin speed while looking for a lost line    */
-#define SHARP_OUTER          400  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
-#define SHARP_INNER          0
+#define SHARP_OUTER          360  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
+#define SHARP_INNER          120  /* gentle inner reverse so 90 deg corners pivot tightly without overshooting */
 #define TURN_FWD             0   /* pivot: outer wheel forward  */
 #define TURN_BACK            0   /* pivot: inner wheel backwards *//* ...and inner wheel BACKWARDS at this speed. Raise both = sharper turns */
 
@@ -200,10 +200,10 @@
 #define AIROST_RIGHT_CORNERS   2   /* Figure 1 has two 90 deg right corners before Ball 1 (0 = disable gating) */
 #endif
 #ifndef RIGHT_CORNER_MIN_MS
-#define RIGHT_CORNER_MIN_MS   80   /* sharp right turn (0001 / BEND right) must accumulate this long to count */
+#define RIGHT_CORNER_MIN_MS  150   /* sharp right turn (0001 / BEND right) must accumulate this long to count */
 #endif
 #ifndef RIGHT_CORNER_GAP_MS
-#define RIGHT_CORNER_GAP_MS 1000   /* minimum gap (ms) between right corners (60 cm apart on Figure 1) */
+#define RIGHT_CORNER_GAP_MS 1500   /* minimum gap (ms) after exiting a right corner before next corner counts */
 #endif
 #ifndef TBAR_MIN_MS
 #define TBAR_MIN_MS           20   /* on a ball branch, require all 4 sensors (1111) this long for end T-bar */

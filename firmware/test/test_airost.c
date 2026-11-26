@@ -163,7 +163,7 @@ static void drive_right_corner(void)
 {
     set_black(0xE); run(JUNCTION_MIN_MS + 10);
     set_black(0x8); run(RIGHT_CORNER_MIN_MS + 20);
-    set_black(0x6); run(RIGHT_CORNER_GAP_MS + 100);
+    set_black(0x6); run(RIGHT_CORNER_GAP_MS + 300);
 }
 
 /* Simulate crossing a left T-junction (1110, optionally drifting to 1111, then back to 0110) */
@@ -315,10 +315,17 @@ int main(void)
     CHECK(strstr(log_txt, "RIGHT CORNER") == NULL,
           "brief 20 ms 0001 glitch does NOT count as a 90 deg right corner");
     clear_logs();
-    drive_right_corner();
+    /* Regression (26 Nov 18:57 log): a slow 1.8 s right corner (alternating 0001 / BEND right)
+     * must count ONLY ONCE (RIGHT CORNER #1), never double-counting as #2 mid-corner */
+    set_black(0xE); run(JUNCTION_MIN_MS + 10);
+    set_black(0x8); run(RIGHT_CORNER_MIN_MS + 20);
+    set_black(0x0); run(600);
+    set_black(0x8); run(600);
+    set_black(0x0); run(500);
+    set_black(0x6); run(RIGHT_CORNER_GAP_MS + 300);
     CHECK(left() > 0 && right() > 0 && strstr(log_txt, "RIGHT CORNER #1") != NULL
-          && strstr(log_txt, "NO COLOR") == NULL,
-          "90 deg right corner #1 counts RIGHT CORNER #1 and does NOT trigger NO COLOR");
+          && strstr(log_txt, "RIGHT CORNER #2") == NULL && strstr(log_txt, "NO COLOR") == NULL,
+          "slow 1.8 s 90 deg right corner #1 counts ONCE (no mid-corner double-count)");
     /* Sustained 1110 drift between Corner #1 and Corner #2 (rc=1/2) is also skipped */
     clear_logs();
     set_black(0x7); run(70);

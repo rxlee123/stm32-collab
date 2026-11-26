@@ -124,10 +124,10 @@
 #define AIROST_RIGHT_CORNERS  2
 #endif
 #ifndef RIGHT_CORNER_MIN_MS
-#define RIGHT_CORNER_MIN_MS  80
+#define RIGHT_CORNER_MIN_MS 150
 #endif
 #ifndef RIGHT_CORNER_GAP_MS
-#define RIGHT_CORNER_GAP_MS 1000
+#define RIGHT_CORNER_GAP_MS 1500
 #endif
 #ifndef TBAR_MIN_MS
 #define TBAR_MIN_MS          20
@@ -271,6 +271,7 @@ static uint8_t         color_cand_hits;
 static AirostPhase     airost_phase;
 static uint8_t         airost_ball_count;
 static uint8_t         airost_right_corners;
+static uint8_t         in_right_corner;
 static uint32_t        right_turn_ms, last_right_corner_t;
 static int8_t          wide_entry_side;   /* -1 left-first, +1 right-only, 0 simultaneous */
 #endif
@@ -545,6 +546,7 @@ static void airost_reset(void)
     airost_phase = AIROST_SEEK_BALL;
     airost_ball_count = 0;
     airost_right_corners = 0;
+    in_right_corner = 0;
     right_turn_ms = 0;
     last_right_corner_t = 0;
     wide_entry_side = 0;
@@ -822,20 +824,28 @@ static void auto_step(uint32_t now)
 
 #if AIROST_MODE
     /* Count Figure 1's two 90 deg right corners (sustained 0001 / BEND right) so wide-tape
-     * 1110 drifts on the top/right straightaways cannot falsely trigger Ball 1 / NO COLOR. */
+     * 1110 drifts on the top/right straightaways cannot falsely trigger Ball 1 / NO COLOR.
+     * Keep refreshing last_right_corner_t while still in the same corner so a slow (>1 s)
+     * 90 deg turn can NEVER double-count (26 Nov log). */
     if (astate == AS_FOLLOW && airost_phase == AIROST_SEEK_BALL && seen_line) {
         uint8_t sharp_r = (line_bits == 0x8) || (n == 0 && was_lost && exit_side > 0);
         if (sharp_r) {
             last_junc_t = now;
-            if (right_turn_ms < 10000) right_turn_ms += LOOP_MS;
-            if (right_turn_ms >= RIGHT_CORNER_MIN_MS && now - last_right_corner_t >= RIGHT_CORNER_GAP_MS) {
-                airost_right_corners++;
+            if (in_right_corner) {
                 last_right_corner_t = now;
-                right_turn_ms = 0;
-                log_msg("RIGHT CORNER #%u\r\n", airost_right_corners);
+            } else {
+                if (right_turn_ms < 10000) right_turn_ms += LOOP_MS;
+                if (right_turn_ms >= RIGHT_CORNER_MIN_MS && now - last_right_corner_t >= RIGHT_CORNER_GAP_MS) {
+                    airost_right_corners++;
+                    in_right_corner = 1;
+                    last_right_corner_t = now;
+                    right_turn_ms = 0;
+                    log_msg("RIGHT CORNER #%u\r\n", airost_right_corners);
+                }
             }
         } else if (line_bits == 0x6 || (line_bits & 1)) {
             right_turn_ms = 0;
+            if (in_right_corner && now - last_right_corner_t >= 200) in_right_corner = 0;
         }
     }
 #endif
@@ -1068,6 +1078,7 @@ static void auto_start(uint32_t now)
     last_error = error = 0;
 #if AIROST_MODE
     right_turn_ms = 0;
+    in_right_corner = 0;
     if (airost_right_corners == 0) last_right_corner_t = now - RIGHT_CORNER_GAP_MS;
     servo_set(SERVO_OPEN_US);
 #else
