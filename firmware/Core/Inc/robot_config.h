@@ -59,7 +59,7 @@
 #define KD                   150  /* gentle damping (follow_pd clamped >= 0 so no reverse kick) */
 #define D_MS                  80  /* how long the damping acts after the line moves (ms). 0 = no damping */
 #define CORNER_SLOW           60  /* slow both wheels in bends (e=10 -> base 240, e=20 -> base 180) */
-#define SEARCH_SPEED         260  /* spin speed while looking for a lost line / 90 deg corner */
+#define SEARCH_SPEED         320  /* crisp 90 deg turn spin speed (finishes in <1 s) */
 #define SHARP_OUTER          350  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
 #define SHARP_INNER          0    /* 0 = stop inner wheel (no harsh reverse kick) */
 #define TURN_FWD             0   /* pivot: outer wheel forward  */
@@ -80,7 +80,7 @@
                                      safer: driving off the track can't flip the colour). Try 500 to use it. */
 #endif
 #define JUNCTION_PASS_MS     120  /* drive straight this long to cross a junction                     */
-#define TURN_MAX_MS         1500  /* give up a junction turn after this long                          */
+#define TURN_MAX_MS         2000  /* give up a junction turn after this long                          */
 #define SEEK_SETTLE_MS       150  /* after seeking (start box, blind parts...): junctions count only after
                                      the line has been followed this long (box edges are not junctions) */
 /* JUNCTION_MIN_MS and JUNCTION_GAP_MS are defined below (AIROST_MODE uses longer values
@@ -211,19 +211,19 @@
 #define COLOR_MIN_CLEAR       80   /* clear readings below this = black tape / lifted off floor (ignored) */
 #endif
 #ifndef COLOR_R_SCALE
-#define COLOR_R_SCALE         75   /* white-balance channel trims (%) calibrated for warm LED - tune in SENSOR TEST */
+#define COLOR_R_SCALE         72   /* white-balance trims (%) calibrated from 17:09 white mat (rn=335 gn=331 bn=327) */
 #endif
 #ifndef COLOR_G_SCALE
 #define COLOR_G_SCALE         98
 #endif
 #ifndef COLOR_B_SCALE
-#define COLOR_B_SCALE        145
+#define COLOR_B_SCALE        165   /* boosted from 145 -> 165 so blue paper reliably beats COLOR_DOM_PCT */
 #endif
 #ifndef COLOR_DOM_PCT
 #define COLOR_DOM_PCT        120   /* strongest channel must beat 2nd-strongest by this % (rejects white/grey) */
 #endif
 #ifndef COLOR_LOCK_SAMPLES
-#define COLOR_LOCK_SAMPLES     5   /* consecutive matching samples (~150 ms) required to lock a colour */
+#define COLOR_LOCK_SAMPLES     4   /* consecutive matching samples (~120 ms) required to lock a colour */
 #endif
 #ifndef AIROST_NEEDED_COLORS
 #define AIROST_NEEDED_COLORS   1   /* 1 = Basic (1 square), up to 3 = Advanced (3 squares) */

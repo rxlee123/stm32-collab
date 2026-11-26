@@ -416,17 +416,18 @@ int main(void)
     set_black(0xF); run(JUNCTION_MIN_MS + 20); /* left branch hits S0 -> 1111 */
     set_black(0x6); run(10);
     CHECK(left() < 0 && right() > 0, "RED target turns LEFT at Ball 1 even on 0111->1111 angled entry");
-    set_black(0x0); run(200); set_black(0x2); run(20); /* long spin > JUNCTION_GAP_MS */
-    CHECK(strstr(log_txt, "turn done") != NULL, "RED turn completes onto Ball 1 branch");
-    /* Residual tee overlap immediately after turn done must NOT trigger premature arrival */
-    clear_logs();
-    set_black(0xF); run(30); set_black(0x6); run(20);
-    CHECK(strstr(log_txt, "ARRIVED") == NULL && left() > 0 && right() > 0,
-          "post-turn junction tee overlap within JUNCTION_GAP_MS does NOT prematurely arrive");
+    set_black(0x0); run(200); set_black(0x2); run(20); /* complete left turn onto Ball 1 branch */
+#if ARRIVE_MM > 0
+    CHECK(strstr(log_txt, "turn done") != NULL && left() == BASE_SPEED && right() == BASE_SPEED,
+          "RED turn completes and creeps ARRIVE_MM before braking");
+    set_black(0x6); run((uint32_t)ARRIVE_MM * 1000u / SPEED_MM_S + 20);
+#endif
+    CHECK(strstr(log_txt, "turn done") != NULL && strstr(log_txt, "ARRIVED ball 1 -> MANUAL") != NULL
+          && left() == 0 && right() == 0 && led2(),
+          "RED turn completes straight onto Ball 1 branch and stops immediately into MANUAL (no ball crash)");
 
     /* Test D: BLUE -> crosses Ball 1, turns LEFT at Ball 2 */
-    press(GPIO_PIN_6, 80); /* stop */
-    press(GPIO_PIN_6, LONG_PRESS_MS + 100); /* reset */
+    press(GPIO_PIN_7, 80); press(GPIO_PIN_7, 80); press(GPIO_PIN_7, 80); /* MANUAL -> AUTO */
     clear_logs();
     tcs_set_white();
     set_black(0x6); press(GPIO_PIN_6, 80); run(60);
@@ -461,26 +462,18 @@ int main(void)
     drive_left_junction(0); /* Ball 3 -> LEFT */
     CHECK(left() < 0 && right() > 0, "GREEN turns LEFT at Ball 3");
 
-    /* ---- Slice 3 (#6): Ball T-bar arrival, automatic MODE_MANUAL handoff & multi-run reset ---- */
-    printf("Ball T-bar arrival, MODE_MANUAL handoff & multi-run reset (#6, ARRIVE_MM=%d):\n", ARRIVE_MM);
-    set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20); /* complete left turn onto Ball 3 branch */
-    set_black(0x6); run(JUNCTION_GAP_MS + 40); /* drive along Ball 3 branch */
+    /* ---- Slice 3 (#6): Ball arrival right after turn done, MODE_MANUAL handoff & multi-run reset ---- */
+    printf("Ball arrival on turn done, MODE_MANUAL handoff & multi-run reset (#6, ARRIVE_MM=%d):\n", ARRIVE_MM);
     clear_logs();
-    /* Mid-branch wide-tape wobble (1110) must NOT prematurely trigger arrival */
-    set_black(0x7); run(JUNCTION_MIN_MS + 20);
-    set_black(0x6); run(JUNCTION_GAP_MS + 40);
-    CHECK(strstr(log_txt, "ARRIVED") == NULL && left() > 0 && right() > 0,
-          "mid-branch 1110 wobble does NOT prematurely trigger T-bar arrival");
-    clear_logs();
-    set_black(0xF); run(TBAR_MIN_MS + 10); /* hit Ball 3 end T-bar (1111) */
+    set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20); /* align straight on Ball 3 branch */
 #if ARRIVE_MM > 0
     CHECK(left() == BASE_SPEED && right() == BASE_SPEED && strstr(log_txt, "ARRIVED") == NULL,
           "non-zero ARRIVE_MM creeps forward before braking");
-    set_black(0x0); run((uint32_t)ARRIVE_MM * 1000u / SPEED_MM_S + 20);
+    set_black(0x6); run((uint32_t)ARRIVE_MM * 1000u / SPEED_MM_S + 20);
 #endif
     CHECK(left() == 0 && right() == 0 && strstr(log_txt, "ARRIVED ball 3 -> MANUAL") != NULL
           && strstr(bt_txt, "ARRIVED ball 3 -> MANUAL") != NULL,
-          "Ball 3 T-bar brakes and logs ARRIVED ball 3 -> MANUAL on USB & BT");
+          "Ball 3 turn done brakes immediately and logs ARRIVED ball 3 -> MANUAL on USB & BT");
     CHECK(!led1() && led2() && !led3(), "auto-switched to MODE_MANUAL (LED2 ON, LED1/LED3 OFF)");
     /* Immediate manual control via Dabble (close gate + drive backward) without touching buttons */
     pad(0x02, 0x04, 0x00); run(700); /* TRIANGLE: close gate on ping pong ball */
@@ -509,18 +502,14 @@ int main(void)
     drive_right_corner();
     drive_left_junction(0); /* Ball 1 -> LEFT */
     CHECK(left() < 0 && right() > 0, "second run turns LEFT at Ball 1");
-    set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20);
-    set_black(0x6); run(JUNCTION_GAP_MS + 40);
     clear_logs();
-    /* Asymmetric T-bar entry (0111 -> 1111 as remaining sensor hits 15 cm T-bar) triggers arrival */
-    set_black(0xE); run(10);
-    set_black(0xF); run(TBAR_MIN_MS + 10);
+    set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20);
 #if ARRIVE_MM > 0
-    set_black(0x0); run((uint32_t)ARRIVE_MM * 1000u / SPEED_MM_S + 20);
+    set_black(0x6); run((uint32_t)ARRIVE_MM * 1000u / SPEED_MM_S + 20);
 #endif
     CHECK(left() == 0 && right() == 0 && strstr(log_txt, "ARRIVED ball 1 -> MANUAL") != NULL
           && led2() && !led3(),
-          "asymmetric T-bar hit on Ball 1 arrives and auto-switches to MODE_MANUAL");
+          "second run aligns straight on Ball 1, stops immediately, and auto-switches to MODE_MANUAL");
     /* Letter command works immediately too */
     *rx_ptr = 'F'; HAL_UART_RxCpltCallback(&huart3); run(10);
     CHECK(left() == MANUAL_SPEED_DEFAULT && right() == MANUAL_SPEED_DEFAULT,

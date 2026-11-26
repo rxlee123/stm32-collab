@@ -1031,10 +1031,21 @@ static void auto_step(uint32_t now)
 #endif
         } else if (line_bits & 0x6) {                            /* centre sensor found a line */
             last_error = error = 0;
-#if AIROST_MODE
-            last_junc_t = now; /* ignore residual tee overlap right after turning onto a ball branch */
-#endif
             log_msg("  turn done\r\n");
+#if AIROST_MODE
+            last_junc_t = now;
+            if (airost_phase == AIROST_ON_BALL_BRANCH) {
+                /* Facing straight down the ball branch: stop immediately (or creep ARRIVE_MM)
+                 * and switch to MANUAL so the robot never crashes into the ping-pong ball. */
+                if (ARRIVE_MM > 0) {
+                    seq_ms = mm_to_ms(ARRIVE_MM);
+                    auto_enter(AS_ARRIVE, now);
+                } else {
+                    airost_complete_arrival(now);
+                }
+                return;
+            }
+#endif
             auto_enter(AS_FOLLOW, now);
         }
         if (now - state_t0 > TURN_MAX_MS) { log_msg("  turn gave up (TURN_MAX_MS)\r\n"); auto_enter(AS_FOLLOW, now); }
