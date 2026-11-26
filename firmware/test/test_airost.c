@@ -479,7 +479,7 @@ int main(void)
     drive_left_junction(0); /* Ball 2 -> LEFT */
     CHECK(left() < 0 && right() > 0, "BLUE turns LEFT at Ball 2");
 
-    /* Test E: GREEN -> crosses Ball 1 & Ball 2, turns LEFT at Ball 3 */
+    /* Test E: GREEN -> crosses Ball 1 (incl. 23:01 angled 1110->1001->0000 regression) & Ball 2, turns LEFT at Ball 3 */
     press(GPIO_PIN_6, 80); /* stop */
     press(GPIO_PIN_6, LONG_PRESS_MS + 100); /* reset */
     clear_logs();
@@ -490,9 +490,21 @@ int main(void)
     CHECK(strstr(log_txt, "COLOR LOCKED: GREEN -> BALL 3") != NULL, "GREEN locks Ball 3");
     drive_right_corner();
     drive_right_corner();
-    drive_left_junction(0); /* Ball 1 -> STRAIGHT */
-    CHECK(left() == BASE_SPEED && right() == BASE_SPEED, "GREEN drives STRAIGHT across Ball 1");
-    run(JUNCTION_PASS_MS + JUNCTION_GAP_MS + 40);
+    clear_logs();
+    set_black(0x7); run(JUNCTION_MIN_MS + 10); /* Ball 1 -> J1 STRAIGHT (enters AS_CROSS) */
+    CHECK(left() == BASE_SPEED && right() == BASE_SPEED && strstr(log_txt, "J1 STRAIGHT") != NULL,
+          "GREEN drives STRAIGHT across Ball 1");
+    /* Regression (26 Nov 23:01 log): long angled 1110 (past JUNCTION_PASS_MS), then 1001 -> 0000
+     * must stay in AS_CROSS until cleared, steer RIGHT on 1001, never BEND left, and never double-count J2! */
+    set_black(0x7); run(JUNCTION_PASS_MS + 30); /* still on 1110 past JUNCTION_PASS_MS */
+    CHECK(left() == BASE_SPEED && right() == BASE_SPEED && strstr(log_txt, "J2") == NULL,
+          "AS_CROSS holds straight while 1110 persists past JUNCTION_PASS_MS (no pull left or J2 double-count)");
+    set_black(0x9); run(2); /* 1001 (S0 on Ball 1 branch, S3 on main line) -> steers RIGHT back to main line */
+    CHECK(left() > right(), "AS_CROSS steers RIGHT on 1001 (away from left Ball 1 branch)");
+    set_black(0x0); run(20); /* brief white gap after exiting AS_CROSS must be GAP straight, NOT BEND left! */
+    CHECK(left() == BASE_SPEED && right() == BASE_SPEED && strstr(log_txt, "BEND left") == NULL,
+          "exiting AS_CROSS onto 0000 stays GAP straight (never phantom BEND left into Ball 1)");
+    set_black(0x6); run(JUNCTION_GAP_MS + 40);
     drive_left_junction(0); /* Ball 2 -> STRAIGHT */
     CHECK(left() == BASE_SPEED && right() == BASE_SPEED, "GREEN drives STRAIGHT across Ball 2");
     run(JUNCTION_PASS_MS + JUNCTION_GAP_MS + 40);

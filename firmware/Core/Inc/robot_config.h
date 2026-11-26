@@ -79,7 +79,13 @@
                                      = background changed. 0 = OFF (use R_INVERT in the route instead,
                                      safer: driving off the track can't flip the colour). Try 500 to use it. */
 #endif
+#ifndef JUNCTION_PASS_MS
+#if AIROST_MODE
+#define JUNCTION_PASS_MS     220  /* AIROST: clear the 19 mm left ball branch cleanly even when angled */
+#else
 #define JUNCTION_PASS_MS     120  /* drive straight this long to cross a junction                     */
+#endif
+#endif
 #define TURN_MAX_MS         2000  /* give up a junction turn after this long                          */
 #define SEEK_SETTLE_MS       150  /* after seeking (start box, blind parts...): junctions count only after
                                      the line has been followed this long (box edges are not junctions) */
@@ -184,7 +190,7 @@
 #endif
 #ifndef JUNCTION_GAP_MS
 #if AIROST_MODE
-#define JUNCTION_GAP_MS      200   /* debounce same junction / post-turn overlap without blocking nearby junctions */
+#define JUNCTION_GAP_MS      250   /* debounce after AS_CROSS clears a ball branch (220+250=470 ms << 20 cm spacing) */
 #else
 #define JUNCTION_GAP_MS      150
 #endif

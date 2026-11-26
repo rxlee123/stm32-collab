@@ -1150,10 +1150,22 @@ static void auto_step(uint32_t now)
             }
 #endif
             /* keep steering while on the wide patch (a line under 3 sensors when slightly
-             * off-centre must still be followed); a full crossing (1111) steers straight */
+             * off-centre must still be followed); a full crossing (1111) steers straight.
+             * In AIROST mode, a wide_nocount patch is the tail of a junction we just crossed
+             * straight — drive straight so 1110 cannot steer us left into the ignored branch! */
+#if AIROST_MODE
+            if (wide_nocount) {
+                drive(BASE_SPEED, BASE_SPEED);
+            } else {
+                error = Robot_LineError(line_bits, error);
+                follow_pd(0);
+                last_error = error;
+            }
+#else
             error = Robot_LineError(line_bits, error);
             follow_pd(0);
             last_error = error;
+#endif
             if (invert_ms && now - state_t0 >= invert_ms) {   /* long wide area = colour swap (0 = off) */
                 inverted ^= 1;
                 debug_print(inverted ? "Background is BLACK now: following the WHITE line\r\n"
@@ -1168,6 +1180,7 @@ static void auto_step(uint32_t now)
         }
         if (wide_nocount) {
 #if AIROST_MODE
+            left_seen_t = wide_seen_t = now - 10000;   /* never BEND left off a dropped left branch */
             log_msg("  J-drop nocount (%lums, gap=%lums, rc=%u b=%u)\r\n",
                     (unsigned long)(now - state_t0), (unsigned long)(now - last_junc_t),
                     airost_right_corners, airost_ball_count);
@@ -1192,6 +1205,24 @@ static void auto_step(uint32_t now)
         return;
 
     case AS_CROSS:
+#if AIROST_MODE
+        if (seen_line) {
+            /* Crossing a LEFT ball branch straight: never steer LEFT into the branch.
+             * If S1 is off while S2/S3 see black (e.g. 1001/0011/0001 = drifting left into Ball 1),
+             * steer gently RIGHT back onto the main line; otherwise drive straight.
+             * Stay in AS_CROSS for at least JUNCTION_PASS_MS AND until n < 3 clears (max 450 ms)
+             * so angled 1110 crossings never drop into wide_nocount -> BEND left (26 Nov 23:01 log). */
+            if (!(line_bits & 2) && (line_bits & 0x0C)) drive(BASE_SPEED, BASE_SPEED / 2);
+            else                                        drive(BASE_SPEED, BASE_SPEED);
+            uint32_t dt = now - state_t0;
+            if ((dt >= JUNCTION_PASS_MS && n < 3) || dt >= 450) {
+                left_seen_t = right_seen_t = wide_seen_t = now - 10000;
+                last_junc_t = now;
+                auto_enter(AS_FOLLOW, now);
+            }
+            return;
+        }
+#endif
         drive(BASE_SPEED, BASE_SPEED);
         if (now - state_t0 >= JUNCTION_PASS_MS) {
             /* Forget the side branch we just crossed so a brief white gap exiting AS_CROSS
