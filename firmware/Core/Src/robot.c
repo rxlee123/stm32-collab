@@ -833,15 +833,16 @@ static void auto_step(uint32_t now)
     if (astate == AS_FOLLOW && airost_phase == AIROST_SEEK_BALL && seen_line) {
         uint8_t sharp_r = (line_bits == 0x8) || (n == 0 && was_lost && exit_side > 0);
         if (sharp_r) {
-            last_junc_t = now;
             if (in_right_corner) {
                 last_right_corner_t = now;
+                if (airost_right_corners <= AIROST_RIGHT_CORNERS) last_junc_t = now;
             } else {
                 if (right_turn_ms < 10000) right_turn_ms += LOOP_MS;
                 if (right_turn_ms >= RIGHT_CORNER_MIN_MS && now - last_right_corner_t >= RIGHT_CORNER_GAP_MS) {
                     airost_right_corners++;
                     in_right_corner = 1;
                     last_right_corner_t = now;
+                    if (airost_right_corners <= AIROST_RIGHT_CORNERS) last_junc_t = now;
                     right_turn_ms = 0;
                     log_msg("RIGHT CORNER #%u\r\n", airost_right_corners);
                 }

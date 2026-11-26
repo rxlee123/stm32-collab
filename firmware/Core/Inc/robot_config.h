@@ -180,15 +180,11 @@
 #define AIROST_MODE            1
 #endif
 #ifndef JUNCTION_MIN_MS
-#if AIROST_MODE
-#define JUNCTION_MIN_MS       50   /* ignore brief wide-tape wobbles (<50 ms) while catching real T-junctions */
-#else
-#define JUNCTION_MIN_MS       20
-#endif
+#define JUNCTION_MIN_MS       20   /* 20 ms catches 30-35 ms real left junctions at BASE_SPEED 300 (26 Nov 20:24 log) */
 #endif
 #ifndef JUNCTION_GAP_MS
 #if AIROST_MODE
-#define JUNCTION_GAP_MS      350   /* Ball 1/2/3 are 20 cm (~650 ms) apart; ignore post-corner/junction wobbles */
+#define JUNCTION_GAP_MS      200   /* debounce same junction / post-turn overlap without blocking nearby junctions */
 #else
 #define JUNCTION_GAP_MS      150
 #endif

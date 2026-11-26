@@ -295,12 +295,12 @@ int main(void)
     press(GPIO_PIN_6, LONG_PRESS_MS + 100);
     set_black(0x6); press(GPIO_PIN_6, 80); run(200);
     clear_logs();
-    /* Regression (26 Nov): brief 25 ms diagonal wobble of 1110 must be ignored as flicker */
-    set_black(0x7); run(25);
+    /* Regression (26 Nov): brief 12 ms diagonal flicker of 1110 must be ignored as flicker */
+    set_black(0x7); run(12);
     set_black(0x6); run(40);
     CHECK(left() > 0 && right() > 0 && strstr(log_txt, "NO COLOR") == NULL
           && strstr(log_txt, "wide flicker") != NULL,
-          "brief 25 ms 1110 diagonal wobble is ignored as wide flicker (no false Ball 1)");
+          "brief 12 ms 1110 diagonal flicker is ignored as wide flicker (no false Ball 1)");
     /* Regression (26 Nov wide tape): sustained 70 ms 1110 drift on top straightaway (rc=0/2) is skipped */
     clear_logs();
     set_black(0x7); run(70);
