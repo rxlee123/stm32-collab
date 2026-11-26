@@ -53,14 +53,14 @@
 
 /* ---------------- LINE FOLLOWING ----------------
  * Speeds are 0..999 (999 = full power). Start slow, speed up later. */
-#define BASE_SPEED           700  /* matches MANUAL_SPEED_DEFAULT (700) */
+#define BASE_SPEED           490  /* 30% slower than 700 (700 * 0.70 = 490) */
 #define MAX_SPEED            999  /* no wheel is ever driven faster than this    */
-#define KP                   120  /* gentle steering scaled for BASE_SPEED 700 (e=10 -> 430/670, e=20 -> 160/640) */
-#define KD                   250  /* damping (follow_pd clamped >= 0 so no reverse kick) */
+#define KP                    85  /* scaled 0.70x for BASE_SPEED 490 (e=10 -> 300/470, e=20 -> 110/450) */
+#define KD                   175  /* scaled 0.70x (follow_pd clamped >= 0 so no reverse kick) */
 #define D_MS                  80  /* how long the damping acts after the line moves (ms). 0 = no damping */
-#define CORNER_SLOW          150  /* slow both wheels in bends (e=10 -> base 550, e=20 -> base 400) */
-#define SEARCH_SPEED         550  /* matches MANUAL_TURN_SPEED (550) */
-#define SHARP_OUTER          700  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
+#define CORNER_SLOW          105  /* scaled 0.70x (e=10 -> base 385, e=20 -> base 280) */
+#define SEARCH_SPEED         385  /* 30% slower than 550 (550 * 0.70 = 385) */
+#define SHARP_OUTER          490  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
 #define SHARP_INNER          0    /* 0 = stop inner wheel (no harsh reverse kick) */
 #define TURN_FWD             0   /* pivot: outer wheel forward  */
 #define TURN_BACK            0   /* pivot: inner wheel backwards *//* ...and inner wheel BACKWARDS at this speed. Raise both = sharper turns */
@@ -69,9 +69,7 @@
                                      Raise it if the robot spins inside dashed-line gaps. */
 #define BEND_MEMORY_MS       150  /* line vanishes within this long after a FAR sensor saw it = a corner:
                                      spin towards it at once (0 = off)                              */
-#define BEND_BACK            150  /* corner turn: spin while drifting BACKWARDS by this much, so sensors close
-                                     to the wheels sweep back over the corner. 0 = spin on the spot.
-                                     Robot still spins past corners: raise (150). Backs too far: lower (50). */
+#define BEND_BACK            105  /* scaled 0.70x from 150 */
 #define SEARCH_MS           1800  /* then turn towards where the line was, for at most this long      */
 #define SWEEP_MS             300  /* after a long gap: look this long one way, then twice as long the other */
 #define SEEK_MS             3000  /* "seeking": after START in the start box, and after R_BLIND, R_INVERT,
