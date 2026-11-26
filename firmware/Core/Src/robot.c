@@ -1017,7 +1017,12 @@ static void auto_step(uint32_t now)
 
     case AS_CROSS:
         drive(BASE_SPEED, BASE_SPEED);
-        if (now - state_t0 >= JUNCTION_PASS_MS) auto_enter(AS_FOLLOW, now);
+        if (now - state_t0 >= JUNCTION_PASS_MS) {
+            /* Forget the side branch we just crossed so a brief white gap exiting AS_CROSS
+             * cannot trigger a phantom BEND left off the main line (26 Nov 21:16 log). */
+            left_seen_t = right_seen_t = wide_seen_t = now - 10000;
+            auto_enter(AS_FOLLOW, now);
+        }
         return;
 
     case AS_TURN:

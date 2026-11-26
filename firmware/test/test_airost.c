@@ -217,7 +217,7 @@ int main(void)
 
     /* Dark / black tape rejected by COLOR_MIN_CLEAR even if one channel dominates */
     clear_logs();
-    tcs_set_rgbc(40, 5, 5, 50);
+    tcs_set_rgbc(20, 5, 5, 30);
     run(350);
     CHECK(strstr(log_txt, "COLOR NONE") != NULL && strstr(log_txt, "COLOR RED") == NULL,
           "dark reading below COLOR_MIN_CLEAR rejected as NONE");

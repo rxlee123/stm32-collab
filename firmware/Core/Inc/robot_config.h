@@ -56,11 +56,11 @@
 #define BASE_SPEED           300  /* 30% of MAX_SPEED (999); PWM ~440 with MOTOR_MIN 200 */
 #define MAX_SPEED            999  /* no wheel is ever driven faster than this    */
 #define KP                    60  /* smooth steering for BASE_SPEED 300 (e=10 -> 180/300, e=20 -> 60/300) */
-#define KD                   150  /* gentle damping (follow_pd clamped >= 0 so no reverse kick) */
+#define KD                    80  /* toned down so returning to 0110 after a bend doesn't kick off the line */
 #define D_MS                  80  /* how long the damping acts after the line moves (ms). 0 = no damping */
 #define CORNER_SLOW           60  /* slow both wheels in bends (e=10 -> base 240, e=20 -> base 180) */
-#define SEARCH_SPEED         320  /* crisp 90 deg turn spin speed (finishes in <1 s) */
-#define SHARP_OUTER          350  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
+#define SEARCH_SPEED         230  /* toned down turning/spin speed for smoother 90 deg turns */
+#define SHARP_OUTER          280  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
 #define SHARP_INNER          0    /* 0 = stop inner wheel (no harsh reverse kick) */
 #define TURN_FWD             0   /* pivot: outer wheel forward  */
 #define TURN_BACK            0   /* pivot: inner wheel backwards *//* ...and inner wheel BACKWARDS at this speed. Raise both = sharper turns */
@@ -69,7 +69,7 @@
                                      Raise it if the robot spins inside dashed-line gaps. */
 #define BEND_MEMORY_MS       150  /* line vanishes within this long after a FAR sensor saw it = a corner:
                                      spin towards it at once (0 = off)                              */
-#define BEND_BACK             90  /* corner turn: spin while drifting backwards slightly */
+#define BEND_BACK             70  /* toned down corner spin backwards drift */
 #define SEARCH_MS           1800  /* then turn towards where the line was, for at most this long      */
 #define SWEEP_MS             300  /* after a long gap: look this long one way, then twice as long the other */
 #define SEEK_MS             3000  /* "seeking": after START in the start box, and after R_BLIND, R_INVERT,
@@ -208,7 +208,7 @@
 #define COLOR_I2C_TIMEOUT_MS   5   /* short I2C timeout (ms) so the 2 ms IR loop is never blocked */
 #endif
 #ifndef COLOR_MIN_CLEAR
-#define COLOR_MIN_CLEAR       80   /* clear readings below this = black tape / lifted off floor (ignored) */
+#define COLOR_MIN_CLEAR       40   /* lowered 80 -> 40 so dark navy blue paper is not rejected as black */
 #endif
 #ifndef COLOR_R_SCALE
 #define COLOR_R_SCALE         72   /* white-balance trims (%) calibrated from 17:09 white mat (rn=335 gn=331 bn=327) */
@@ -220,7 +220,7 @@
 #define COLOR_B_SCALE        165   /* boosted from 145 -> 165 so blue paper reliably beats COLOR_DOM_PCT */
 #endif
 #ifndef COLOR_DOM_PCT
-#define COLOR_DOM_PCT        120   /* strongest channel must beat 2nd-strongest by this % (rejects white/grey) */
+#define COLOR_DOM_PCT        115   /* lowered 120 -> 115 (white mat is ~101%) to catch softer/cyan-ish blue paper */
 #endif
 #ifndef COLOR_LOCK_SAMPLES
 #define COLOR_LOCK_SAMPLES     4   /* consecutive matching samples (~120 ms) required to lock a colour */
