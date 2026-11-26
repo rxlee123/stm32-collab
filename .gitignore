@@ -10,6 +10,11 @@ Release/
 *.list
 *.hex
 *.bin
+# keep published branch firmware binaries
+!firmware/build/
+!firmware/build/*.elf
+!firmware/build/*.hex
+!firmware/build/*.bin
 # host test binaries
 firmware/test/run
 firmware/test/run_route
