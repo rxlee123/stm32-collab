@@ -132,6 +132,39 @@
 #ifndef TBAR_MIN_MS
 #define TBAR_MIN_MS          20
 #endif
+#ifndef COLOR_REF_WHITE
+#define COLOR_REF_WHITE     336, 332, 332
+#endif
+#ifndef COLOR_REF_RED
+#define COLOR_REF_RED       564, 181, 255
+#endif
+#ifndef COLOR_REF_BLUE
+#define COLOR_REF_BLUE      269, 352, 379
+#endif
+#ifndef COLOR_REF_GREEN
+#define COLOR_REF_GREEN     285, 419, 296
+#endif
+#ifndef COLOR_MIN_DIST
+#define COLOR_MIN_DIST       40
+#endif
+#ifndef COLOR_MIN_COS
+#define COLOR_MIN_COS       580
+#endif
+#ifndef TURN90_SPEED
+#define TURN90_SPEED        SEARCH_SPEED
+#endif
+#ifndef TURN90_MS
+#define TURN90_MS           550
+#endif
+#ifndef TURN_ADVANCE_MS
+#define TURN_ADVANCE_MS       0
+#endif
+#ifndef BALL_SETTLE_MS
+#define BALL_SETTLE_MS       80
+#endif
+#ifndef BALL_PULSE_MAX_MS
+#define BALL_PULSE_MAX_MS     0
+#endif
 
 extern TIM_HandleTypeDef htim2;   /* motor PWM: CH1 = A0, CH4 = A3 */
 extern TIM_HandleTypeDef htim3;   /* servo PWM: CH4 = B1           */
@@ -211,7 +244,9 @@ static uint32_t seq_ms;              /* how long the current blind drive lasts *
 static int      junction_index;
 static uint8_t  finish_armed;
 static int8_t   turn_dir;            /* -1 left, +1 right                      */
+#if !AIROST_MODE
 static uint8_t  turn_left_line;      /* turn phase: 0 = still on old line      */
+#endif
 static int      speed_l, speed_r;
 
 /* servo */
@@ -258,7 +293,9 @@ static uint8_t         tcs_err;
 static uint32_t        color_poll_t;
 static uint16_t        raw_r, raw_g, raw_b, raw_c;
 static uint16_t        norm_r, norm_g, norm_b;
-static int             color_dom_pct;
+static uint16_t        chr_r, chr_g, chr_b;
+static int             color_dist_w;
+static int             color_cos;
 static DetectedColor   color_now;
 static DetectedColor   color_stable;      /* debounced colour (COLOR_LOCK_SAMPLES consecutive hits) */
 static DetectedColor   color_st_cand;
@@ -274,7 +311,15 @@ static uint8_t         airost_right_corners;
 static uint8_t         in_right_corner;
 static uint32_t        right_turn_ms, last_right_corner_t;
 static int8_t          wide_entry_side;   /* -1 left-first, +1 right-only, 0 simultaneous */
+static uint32_t        wide_left_ms;      /* ms in AS_WIDE with S0 (far-left) active */
+static uint8_t         ball_armed;        /* Ball zone: corner #2 done and line centred BALL_SETTLE_MS */
+static uint8_t         ball_center_on;
+static uint32_t        ball_center_t;
+static uint8_t         pulse_on;          /* Ball zone: 2-sensor left pulse (1100/1010) in progress */
+static uint32_t        pulse_t0;
 #endif
+static uint8_t         spin_test_on;      /* MANUAL 'T': timed 90 deg left test spin */
+static uint32_t        spin_test_t0;
 
 /* ------------------------------------------------------------------ */
 /*  Small helpers                                                     */
@@ -461,12 +506,36 @@ static int tcs_init(void)
     return 1;
 }
 
-static DetectedColor color_classify(uint16_t r, uint16_t g, uint16_t b, uint16_t c,
-                                    uint16_t *out_rn, uint16_t *out_gn, uint16_t *out_bn, int *out_dom)
+static uint32_t isqrt32(uint32_t x)
 {
+    uint32_t r = 0, bit = 1u << 30;
+    while (bit > x) bit >>= 2;
+    while (bit) {
+        if (x >= r + bit) { x -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+
+static DetectedColor color_classify(uint16_t r, uint16_t g, uint16_t b, uint16_t c,
+                                    uint16_t *out_rn, uint16_t *out_gn, uint16_t *out_bn,
+                                    uint16_t *out_cr, uint16_t *out_cg, uint16_t *out_cb,
+                                    int *out_dw, int *out_cos)
+{
+    static const int ref_w[3] = { COLOR_REF_WHITE };
+    static const int ref_c[3][3] = {
+        { COLOR_REF_RED   },
+        { COLOR_REF_BLUE  },
+        { COLOR_REF_GREEN },
+    };
+    static const DetectedColor ref_id[3] = { COLOR_RED, COLOR_BLUE, COLOR_GREEN };
+
     if (c < COLOR_MIN_CLEAR) {
         *out_rn = *out_gn = *out_bn = 0;
-        *out_dom = 0;
+        *out_cr = *out_cg = *out_cb = 0;
+        *out_dw = 0;
+        *out_cos = 0;
         return COLOR_NONE;
     }
     uint32_t rn = ((uint32_t)r * 1000u / c) * (uint32_t)COLOR_R_SCALE / 100u;
@@ -476,20 +545,50 @@ static DetectedColor color_classify(uint16_t r, uint16_t g, uint16_t b, uint16_t
     *out_gn = (uint16_t)gn;
     *out_bn = (uint16_t)bn;
 
-    uint32_t top, second;
-    DetectedColor cand;
-    if (rn >= gn && rn >= bn) {
-        top = rn; second = gn > bn ? gn : bn; cand = COLOR_RED;
-    } else if (gn >= rn && gn >= bn) {
-        top = gn; second = rn > bn ? rn : bn; cand = COLOR_GREEN;
-    } else {
-        top = bn; second = rn > gn ? rn : gn; cand = COLOR_BLUE;
+    uint32_t sum = rn + gn + bn;
+    if (sum == 0) {
+        *out_cr = *out_cg = *out_cb = 0;
+        *out_dw = 0;
+        *out_cos = 0;
+        return COLOR_NONE;
     }
+    int cr = (int)(rn * 1000u / sum);
+    int cg = (int)(gn * 1000u / sum);
+    int cb = (int)(bn * 1000u / sum);
+    *out_cr = (uint16_t)cr;
+    *out_cg = (uint16_t)cg;
+    *out_cb = (uint16_t)cb;
 
-    if (top == 0) { *out_dom = 0; return COLOR_NONE; }
-    if (second == 0) { *out_dom = 999; return cand; }
-    *out_dom = (int)(top * 100u / second);
-    return (top * 100u >= second * (uint32_t)COLOR_DOM_PCT) ? cand : COLOR_NONE;
+    /* Vector from WHITE reference in chromaticity space:
+     * magnitude (dW) separates coloured paper from white mat (regardless of brightness);
+     * cosine similarity against (REF_c - WHITE) identifies hue even for pale/cyan-ish blue! */
+    int vr = cr - ref_w[0], vg = cg - ref_w[1], vb = cb - ref_w[2];
+    uint32_t dW = isqrt32((uint32_t)(vr * vr + vg * vg + vb * vb));
+    *out_dw = (int)dW;
+    if (dW == 0) { *out_cos = 0; return COLOR_NONE; }
+
+    int best_cos = -2000, second_cos = -2000;
+    DetectedColor best = COLOR_NONE;
+    for (int i = 0; i < 3; i++) {
+        int ur = ref_c[i][0] - ref_w[0];
+        int ug = ref_c[i][1] - ref_w[1];
+        int ub = ref_c[i][2] - ref_w[2];
+        uint32_t un = isqrt32((uint32_t)(ur * ur + ug * ug + ub * ub));
+        if (un == 0) continue;
+        int32_t dot = (int32_t)vr * ur + (int32_t)vg * ug + (int32_t)vb * ub;
+        int cos_v = (int)(dot * 1000 / (int32_t)(dW * un));
+        if (cos_v > best_cos) {
+            second_cos = best_cos;
+            best_cos = cos_v;
+            best = ref_id[i];
+        } else if (cos_v > second_cos) {
+            second_cos = cos_v;
+        }
+    }
+    *out_cos = best_cos;
+    if ((int)dW >= COLOR_MIN_DIST && best_cos >= COLOR_MIN_COS && best_cos - second_cos >= 100)
+        return best;
+    return COLOR_NONE;
 }
 
 static int tcs_poll(uint32_t now)
@@ -512,7 +611,10 @@ static int tcs_poll(uint32_t now)
     raw_r = (uint16_t)(buf[2] | ((uint16_t)buf[3] << 8));
     raw_g = (uint16_t)(buf[4] | ((uint16_t)buf[5] << 8));
     raw_b = (uint16_t)(buf[6] | ((uint16_t)buf[7] << 8));
-    color_now = color_classify(raw_r, raw_g, raw_b, raw_c, &norm_r, &norm_g, &norm_b, &color_dom_pct);
+    color_now = color_classify(raw_r, raw_g, raw_b, raw_c,
+                               &norm_r, &norm_g, &norm_b,
+                               &chr_r, &chr_g, &chr_b,
+                               &color_dist_w, &color_cos);
     if (color_now == COLOR_NONE) {
         color_st_cand = COLOR_NONE;
         color_st_hits = 0;
@@ -550,6 +652,10 @@ static void airost_reset(void)
     right_turn_ms = 0;
     last_right_corner_t = 0;
     wide_entry_side = 0;
+    wide_left_ms = 0;
+    ball_armed = 0;
+    ball_center_on = 0;
+    pulse_on = 0;
 }
 
 static void airost_record_color(DetectedColor c)
@@ -561,6 +667,8 @@ static void airost_record_color(DetectedColor c)
         airost_right_corners = 0;
         in_right_corner = 0;
         right_turn_ms = 0;
+        ball_armed = 0;
+        ball_center_on = 0;
     }
     color_patch_state = CP_LOCKED;
     log_msg("COLOR LOCKED: %s -> BALL %d (rn=%u gn=%u bn=%u C=%u)\r\n",
@@ -772,9 +880,11 @@ static void airost_complete_arrival(uint32_t now)
 static void start_junction_action(uint32_t now)
 {
     unsigned long dur = (unsigned long)(now - state_t0);
-    last_junc_t = now;
     if (airost_phase == AIROST_SEEK_BALL) {
         if (wide_entry_side > 0) {
+            /* Do NOT touch last_junc_t when skipping a right-side wobble/corner!
+             * Otherwise a real left Ball junction <200 ms later gets silently dropped
+             * by wide_nocount (26 Nov 21:03 log). */
             log_msg("J-skip RIGHT corner (R_FOLLOW, %lums) b=%d%d%d%d\r\n", dur,
                     black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1);
             auto_enter(AS_FOLLOW, now);
@@ -787,6 +897,7 @@ static void start_junction_action(uint32_t now)
             auto_enter(AS_FOLLOW, now);
             return;
         }
+        last_junc_t = now;
         int target = (color_count > 0) ? color_to_ball(color_slots[0]) : 0;
         if (target == 0) {
             brake();
@@ -802,13 +913,14 @@ static void start_junction_action(uint32_t now)
         } else {
             log_msg("J%d LEFT -> ball %d (%lums)\r\n", airost_ball_count, target, dur);
             turn_dir = -1;
-            turn_left_line = 0;
+            seq_phase = 0;
             airost_phase = AIROST_ON_BALL_BRANCH;
             auto_enter(AS_TURN, now);
         }
         return;
     }
     /* AIROST_ON_BALL_BRANCH: end T-bar reached */
+    last_junc_t = now;
     if (ARRIVE_MM > 0) {
         seq_ms = mm_to_ms(ARRIVE_MM);
         auto_enter(AS_ARRIVE, now);
@@ -836,28 +948,67 @@ static void auto_step(uint32_t now)
     /* Count Figure 1's two 90 deg right corners (sustained 0001 / BEND right) so wide-tape
      * 1110 drifts on the top/right straightaways cannot falsely trigger Ball 1 / NO COLOR.
      * Keep refreshing last_right_corner_t while still in the same corner so a slow (>1 s)
-     * 90 deg turn can NEVER double-count (26 Nov log). */
+     * 90 deg turn can NEVER double-count. Once both corners finish and the line is steady
+     * without S3 for BALL_SETTLE_MS, arm the Ball zone and stop right-corner tracking so
+     * straightaway wobbles can never spam RIGHT CORNER #3/#4 or poison last_junc_t. */
     if (astate == AS_FOLLOW && airost_phase == AIROST_SEEK_BALL && seen_line) {
-        uint8_t sharp_r = (line_bits == 0x8) || (n == 0 && was_lost && exit_side > 0);
-        if (sharp_r) {
-            if (in_right_corner) {
-                last_right_corner_t = now;
-                if (airost_right_corners <= AIROST_RIGHT_CORNERS) last_junc_t = now;
-            } else {
-                if (right_turn_ms < 10000) right_turn_ms += LOOP_MS;
-                if (right_turn_ms >= RIGHT_CORNER_MIN_MS && now - last_right_corner_t >= RIGHT_CORNER_GAP_MS) {
-                    airost_right_corners++;
-                    in_right_corner = 1;
+        if (!ball_armed) {
+            uint8_t sharp_r = (line_bits == 0x8) || (n == 0 && was_lost && exit_side > 0);
+            if (sharp_r) {
+                ball_center_on = 0;
+                if (in_right_corner) {
                     last_right_corner_t = now;
-                    if (airost_right_corners <= AIROST_RIGHT_CORNERS) last_junc_t = now;
+                    if (airost_right_corners < AIROST_RIGHT_CORNERS) last_junc_t = now;
+                } else if (airost_right_corners < AIROST_RIGHT_CORNERS) {
+                    if (right_turn_ms < 10000) right_turn_ms += LOOP_MS;
+                    if (right_turn_ms >= RIGHT_CORNER_MIN_MS && now - last_right_corner_t >= RIGHT_CORNER_GAP_MS) {
+                        airost_right_corners++;
+                        in_right_corner = 1;
+                        last_right_corner_t = now;
+                        if (airost_right_corners < AIROST_RIGHT_CORNERS) last_junc_t = now;
+                        right_turn_ms = 0;
+                        log_msg("RIGHT CORNER #%u\r\n", airost_right_corners);
+                    }
+                }
+            } else {
+                if (line_bits == 0x6 || (line_bits & 1)) {
                     right_turn_ms = 0;
-                    log_msg("RIGHT CORNER #%u\r\n", airost_right_corners);
+                    if (in_right_corner && now - last_right_corner_t >= 200) in_right_corner = 0;
+                }
+                if (airost_right_corners >= AIROST_RIGHT_CORNERS && n > 0 && !(line_bits & 8)) {
+                    if (!ball_center_on) { ball_center_on = 1; ball_center_t = now; }
+                    else if (now - ball_center_t >= BALL_SETTLE_MS) {
+                        ball_armed = 1;
+                        in_right_corner = 0;
+                        log_msg("BALL ZONE ARMED (rc=%u)\r\n", airost_right_corners);
+                    }
+                } else {
+                    ball_center_on = 0;
                 }
             }
-        } else if (line_bits == 0x6 || (line_bits & 1)) {
-            right_turn_ms = 0;
-            if (in_right_corner && now - last_right_corner_t >= 200) in_right_corner = 0;
+        } else {
+            /* Ball zone diagnostic (+ optional fallback if BALL_PULSE_MAX_MS > 0):
+             * detect a brief 2-sensor left pulse (1100 or 1010) returning cleanly to centre. */
+            if (line_bits == 0x3 || line_bits == 0x5) {
+                if (!pulse_on) { pulse_on = 1; pulse_t0 = now; }
+            } else if (pulse_on) {
+                unsigned long pdur = (unsigned long)(now - pulse_t0);
+                pulse_on = 0;
+                if ((line_bits == 0x6 || line_bits == 0x2 || line_bits == 0x4)
+                    && pdur >= JUNCTION_MIN_MS && pdur <= 150) {
+                    log_msg("  ball-zone 2-sensor left pulse (%lums)\r\n", pdur);
+                    if (BALL_PULSE_MAX_MS > 0 && pdur <= BALL_PULSE_MAX_MS
+                        && now - last_junc_t >= JUNCTION_GAP_MS) {
+                        wide_entry_side = -1;
+                        state_t0 = pulse_t0;
+                        start_junction_action(now);
+                        return;
+                    }
+                }
+            }
         }
+    } else {
+        pulse_on = 0;
     }
 #endif
 
@@ -879,6 +1030,8 @@ static void auto_step(uint32_t now)
             /* Right-only entry (S3 on, S0 off -> e.g. 0111 at a 90 deg right corner) = +1 (R_FOLLOW).
              * Any entry with S0 on (1110 or 1111, even after 0011) = left/T ball junction (-1). */
             wide_entry_side = ((line_bits & 8) && !(line_bits & 1)) ? 1 : -1;
+            wide_left_ms = (line_bits & 1) ? LOOP_MS : 0;
+            pulse_on = 0;
 #endif
             auto_enter(AS_WIDE, now);
             wide_all_t = now;
@@ -967,7 +1120,19 @@ static void auto_step(uint32_t now)
 #if AIROST_MODE
             /* If far-left S0 turns on at any point during WIDE (e.g. 0111 -> 1111 angled entry
              * into a Ball left junction), treat it as a left/T junction, never a right corner! */
-            if (line_bits & 1) wide_entry_side = -1;
+            if (line_bits & 1) {
+                wide_entry_side = -1;
+                if (wide_left_ms < 10000) wide_left_ms += LOOP_MS;
+            }
+            /* Trigger a confirmed Ball left junction IMMEDIATELY once S0 has been on for
+             * JUNCTION_MIN_MS — don't wait for n < 3 (stops riding past the branch or getting
+             * stuck in AS_WIDE for seconds on wide 1110 tape). */
+            if (!wide_nocount && airost_phase == AIROST_SEEK_BALL
+                && airost_right_corners >= AIROST_RIGHT_CORNERS
+                && wide_left_ms >= JUNCTION_MIN_MS) {
+                start_junction_action(now);
+                return;
+            }
 #endif
 #if !AIROST_MODE
             /* words that act at once (INVERT, BLIND, PICKUP, DROP): as soon as the patch is a real one */
@@ -1001,9 +1166,20 @@ static void auto_step(uint32_t now)
             }
             return;
         }
-        if (wide_nocount) auto_enter(AS_FOLLOW, now);   /* part of the junction just counted */
-        else if (now - state_t0 < JUNCTION_MIN_MS) {     /* too short: a flicker, not a junction */
+        if (wide_nocount) {
+#if AIROST_MODE
+            log_msg("  J-drop nocount (%lums, gap=%lums, rc=%u b=%u)\r\n",
+                    (unsigned long)(now - state_t0), (unsigned long)(now - last_junc_t),
+                    airost_right_corners, airost_ball_count);
+#endif
+            auto_enter(AS_FOLLOW, now);   /* part of the junction just counted */
+        } else if (now - state_t0 < JUNCTION_MIN_MS) {     /* too short: a flicker, not a junction */
+#if AIROST_MODE
+            log_msg("  wide flicker %lums: not counted (rc=%u b=%u)\r\n",
+                    (unsigned long)(now - state_t0), airost_right_corners, airost_ball_count);
+#else
             log_msg("  wide flicker %lums: not counted\r\n", (unsigned long)(now - state_t0));
+#endif
             auto_enter(AS_FOLLOW, now);
         }
 #if AIROST_MODE
@@ -1026,35 +1202,42 @@ static void auto_step(uint32_t now)
         return;
 
     case AS_TURN:
+#if AIROST_MODE
+        /* Simple timed 90 deg left turn -> brake -> MANUAL (sensors ignored during the spin so
+         * it can neither stop early at 30 deg nor time out back into AS_FOLLOW). */
+#if TURN_ADVANCE_MS > 0
+        if (seq_phase == 0) {
+            drive(BASE_SPEED, BASE_SPEED);
+            if (now - state_t0 >= TURN_ADVANCE_MS) seq_next(now);
+            return;
+        }
+#endif
+        drive(turn_dir * TURN90_SPEED, -turn_dir * TURN90_SPEED);
+        if (now - state_t0 >= TURN90_MS) {
+            last_error = error = 0;
+            last_junc_t = now;
+            log_msg("  turn done (%ums)\r\n", (unsigned)TURN90_MS);
+            if (ARRIVE_MM > 0) {
+                seq_ms = mm_to_ms(ARRIVE_MM);
+                auto_enter(AS_ARRIVE, now);
+            } else {
+                airost_complete_arrival(now);
+            }
+        }
+        return;
+#else
         /* spin towards the branch: first leave the old line, then find the new one */
         drive(turn_dir * SEARCH_SPEED, -turn_dir * SEARCH_SPEED);
         if (!turn_left_line) {
-#if AIROST_MODE
-            if (now - state_t0 >= TURN_MIN_MS && (line_bits & 0x6) == 0) turn_left_line = 1;
-#else
             if ((line_bits & 0x6) == 0) turn_left_line = 1;      /* centre sensors off the line */
-#endif
         } else if (line_bits & 0x6) {                            /* centre sensor found a line */
             last_error = error = 0;
             log_msg("  turn done\r\n");
-#if AIROST_MODE
-            last_junc_t = now;
-            if (airost_phase == AIROST_ON_BALL_BRANCH) {
-                /* Facing straight down the ball branch: stop immediately (or creep ARRIVE_MM)
-                 * and switch to MANUAL so the robot never crashes into the ping-pong ball. */
-                if (ARRIVE_MM > 0) {
-                    seq_ms = mm_to_ms(ARRIVE_MM);
-                    auto_enter(AS_ARRIVE, now);
-                } else {
-                    airost_complete_arrival(now);
-                }
-                return;
-            }
-#endif
             auto_enter(AS_FOLLOW, now);
         }
         if (now - state_t0 > TURN_MAX_MS) { log_msg("  turn gave up (TURN_MAX_MS)\r\n"); auto_enter(AS_FOLLOW, now); }
         return;
+#endif
 
     case AS_BLIND:                              /* straight ahead, sensors ignored */
         drive(BASE_SPEED, BASE_SPEED);
@@ -1200,6 +1383,7 @@ static void letter_command(int c, uint32_t now)
     int s = manual_speed, t = MANUAL_TURN_SPEED;
     bt_last = now;
     bt_from_app = 0;
+    spin_test_on = 0;
     switch (c) {
     case 'F': drive(s, s);           break;
     case 'B': drive(-s, -s);         break;
@@ -1210,6 +1394,11 @@ static void letter_command(int c, uint32_t now)
     case 'H': drive(-s / 3, -s);     break;   /* back-left              */
     case 'J': drive(-s, -s / 3);     break;   /* back-right             */
     case 'S': stop_motors();         break;
+    case 'T':
+        spin_test_on = 1; spin_test_t0 = now;
+        drive(-TURN90_SPEED, TURN90_SPEED);
+        log_msg("TEST 90 left (%ums @ %d)\r\n", (unsigned)TURN90_MS, (int)TURN90_SPEED);
+        break;
     case 'W': case 'C': servo_set(SERVO_CLOSED_US); break;
     case 'w': case 'O': servo_set(SERVO_OPEN_US);   break;
     case 'q': manual_speed = MAX_SPEED; break;
@@ -1322,17 +1511,25 @@ static void bt_poll(uint32_t now)
         if (dabble_byte((uint8_t)c, now)) {
             if (gp_new) {                       /* a whole gamepad message just arrived */
                 gp_new = 0;
-                if (mode == MODE_MANUAL) { bt_last = now; bt_from_app = 1; gamepad_apply(); }
+                if (mode == MODE_MANUAL) { bt_last = now; bt_from_app = 1; spin_test_on = 0; gamepad_apply(); }
             }
             continue;
         }
         if (mode == MODE_MANUAL) letter_command(c, now);
     }
-    if (mode != MODE_MANUAL) gp_prev = 0;
+    if (mode != MODE_MANUAL) { gp_prev = 0; spin_test_on = 0; }
 }
 
 static void manual_step(uint32_t now)
 {
+    if (spin_test_on) {
+        if (now - spin_test_t0 >= TURN90_MS) {
+            spin_test_on = 0;
+            brake();
+            log_msg("TEST 90 done\r\n");
+        }
+        return;
+    }
     uint32_t limit = bt_from_app ? DABBLE_TIMEOUT_MS : BT_TIMEOUT_MS;
     if (limit && now - bt_last > limit) stop_motors();
 }
@@ -1396,9 +1593,9 @@ static void update_leds(uint32_t now)
 static void format_color_line(char *buf, size_t cap)
 {
     if (tcs_err) snprintf(buf, cap, "COLOR ERR (I2C)\r\n");
-    else snprintf(buf, cap, "COLOR %s R=%u G=%u B=%u C=%u rn=%u gn=%u bn=%u dom=%d%% lock=%s\r\n",
+    else snprintf(buf, cap, "COLOR %s R=%u G=%u B=%u C=%u rn=%u gn=%u bn=%u ch=%u,%u,%u dW=%d cos=%d lock=%s\r\n",
                   COLOR_NAME[color_now], raw_r, raw_g, raw_b, raw_c,
-                  norm_r, norm_g, norm_b, color_dom_pct, COLOR_NAME[color_stable]);
+                  norm_r, norm_g, norm_b, chr_r, chr_g, chr_b, color_dist_w, color_cos, COLOR_NAME[color_stable]);
 }
 #endif
 
@@ -1538,6 +1735,7 @@ void Robot_Loop(void)
         } else if (mode == MODE_MOTOR_TEST) {
             mt_running = !mt_running; mt_t0 = now;
         } else if (mode == MODE_MANUAL) {
+            spin_test_on = 0;
             stop_motors();
         } else if (mode == MODE_SENSOR_TEST) {
             st_count = 0; log_msg("SENSOR TEST: wide counter reset\r\n");

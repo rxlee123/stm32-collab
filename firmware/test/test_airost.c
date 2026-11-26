@@ -227,14 +227,30 @@ int main(void)
     tcs_set_rgbc(900, 220, 200, 1400);
     run(350);
     CHECK(strstr(log_txt, "COLOR RED") != NULL && strstr(bt_txt, "COLOR RED") != NULL
-          && strstr(log_txt, "dom=") != NULL && strstr(log_txt, "rn=") != NULL
+          && strstr(log_txt, "dW=") != NULL && strstr(log_txt, "rn=") != NULL
           && strstr(log_txt, "lock=RED") != NULL,
-          "RED patch prints COLOR RED with rn/gn/bn, dom%, and lock=RED on USB & BT");
+          "RED patch prints COLOR RED with rn/gn/bn, dW, and lock=RED on USB & BT");
 
     clear_logs();
     tcs_set_rgbc(140, 180, 620, 980);
     run(350);
     CHECK(strstr(log_txt, "COLOR BLUE") != NULL, "BLUE patch classified at lower brightness");
+
+#if COLOR_R_SCALE == 72 && COLOR_G_SCALE == 98 && COLOR_B_SCALE == 165
+    /* Regression (26 Nov blue paper screenshot): R=849 G=816 B=521 C=2047 (pale cyan-ish blue, dom=107%) */
+    clear_logs();
+    tcs_set_rgbc(849, 816, 521, 2047);
+    run(350);
+    CHECK(strstr(log_txt, "COLOR BLUE") != NULL && strstr(log_txt, "lock=BLUE") != NULL,
+          "real pale blue paper (R=849 G=816 B=521 C=2047) classifies & locks as BLUE");
+
+    /* Real white mat reading (26 Nov log): R=2439 G=1768 B=1050 C=5191 must stay NONE */
+    clear_logs();
+    tcs_set_rgbc(2439, 1768, 1050, 5191);
+    run(350);
+    CHECK(strstr(log_txt, "COLOR NONE") != NULL && strstr(log_txt, "lock=NONE") != NULL,
+          "real white mat (R=2439 G=1768 B=1050 C=5191) stays NONE");
+#endif
 
     clear_logs();
     tcs_set_rgbc(160, 580, 170, 960);
@@ -411,12 +427,22 @@ int main(void)
     /* Pass both 90 deg right corners, then hit Ball 1 via 0111 -> 1111 (angled entry: S3 first, then S0!) -> MUST turn LEFT! */
     drive_right_corner();
     drive_right_corner();
+    /* Regression (26 Nov 21:03 log): a 0111 right wobble (< JUNCTION_GAP_MS before Ball 1)
+     * must skip as RIGHT corner WITHOUT poisoning last_junc_t and dropping Ball 1! */
+    clear_logs();
+    set_black(0xE); run(JUNCTION_MIN_MS + 20);
+    set_black(0x6); run(80); /* 80 ms < JUNCTION_GAP_MS (200 ms) */
+    CHECK(strstr(log_txt, "J-skip RIGHT corner") != NULL,
+          "0111 right wobble logs J-skip RIGHT corner");
     set_black(0xC); run(12); /* slightly left-of-center approach (S3 active) */
     set_black(0xE); run(8);  /* 0111 for 8 ms before S0 hits the left branch (26 Nov 20:39 log) */
-    set_black(0xF); run(JUNCTION_MIN_MS + 20); /* left branch hits S0 -> 1111 */
-    set_black(0x6); run(10);
-    CHECK(left() < 0 && right() > 0, "RED target turns LEFT at Ball 1 even on 0111->1111 angled entry");
-    set_black(0x0); run(200); set_black(0x2); run(20); /* complete left turn onto Ball 1 branch */
+    set_black(0xF); run(JUNCTION_MIN_MS + 20); /* left branch hits S0 -> 1111 (triggers immediately!) */
+    CHECK(left() < 0 && right() > 0, "RED target turns LEFT at Ball 1 immediately on 0111->1111 even <200ms after right wobble");
+    /* Timed 90 deg left spin ignores sensors: seeing 0110 mid-spin must NOT stop early */
+    set_black(0x6); run(TURN90_MS / 2);
+    CHECK(left() < 0 && right() > 0 && strstr(log_txt, "ARRIVED") == NULL,
+          "timed 90 deg left spin ignores centre sensors mid-turn (no early 30 deg stop)");
+    set_black(0x0); run(TURN90_MS / 2 + 40);
 #if ARRIVE_MM > 0
     CHECK(strstr(log_txt, "turn done") != NULL && left() == BASE_SPEED && right() == BASE_SPEED,
           "RED turn completes and creeps ARRIVE_MM before braking");
@@ -424,18 +450,29 @@ int main(void)
 #endif
     CHECK(strstr(log_txt, "turn done") != NULL && strstr(log_txt, "ARRIVED ball 1 -> MANUAL") != NULL
           && left() == 0 && right() == 0 && led2(),
-          "RED turn completes straight onto Ball 1 branch and stops immediately into MANUAL (no ball crash)");
+          "RED timed 90 deg left turn stops immediately into MANUAL even on blank floor");
 
-    /* Test D: BLUE -> crosses Ball 1, turns LEFT at Ball 2 */
+    /* Test D: BLUE (using real blue screenshot reading when default scales active) -> crosses Ball 1, turns LEFT at Ball 2 */
     press(GPIO_PIN_7, 80); press(GPIO_PIN_7, 80); press(GPIO_PIN_7, 80); /* MANUAL -> AUTO */
     clear_logs();
     tcs_set_white();
     set_black(0x6); press(GPIO_PIN_6, 80); run(60);
-    tcs_set_rgbc(140, 180, 680, 1050); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
+#if COLOR_R_SCALE == 72 && COLOR_G_SCALE == 98 && COLOR_B_SCALE == 165
+    tcs_set_rgbc(849, 816, 521, 2047);
+#else
+    tcs_set_rgbc(140, 180, 680, 1050);
+#endif
+    run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(strstr(log_txt, "COLOR LOCKED: BLUE -> BALL 2") != NULL, "BLUE locks Ball 2");
     drive_right_corner();
     drive_right_corner();
+    /* Regression (26 Nov 21:16): 0001 wobble in Ball zone must NOT spam RIGHT CORNER #3 or drop Ball 1 */
+    clear_logs();
+    set_black(0x8); run(RIGHT_CORNER_MIN_MS + 40);
+    set_black(0x6); run(40);
+    CHECK(strstr(log_txt, "RIGHT CORNER") == NULL,
+          "0001 wobble in Ball zone does not trigger phantom RIGHT CORNER #3");
     drive_left_junction(0); /* Ball 1 -> STRAIGHT */
     CHECK(left() == BASE_SPEED && right() == BASE_SPEED, "BLUE drives STRAIGHT across Ball 1");
     run(JUNCTION_PASS_MS + JUNCTION_GAP_MS + 40);
@@ -465,7 +502,7 @@ int main(void)
     /* ---- Slice 3 (#6): Ball arrival right after turn done, MODE_MANUAL handoff & multi-run reset ---- */
     printf("Ball arrival on turn done, MODE_MANUAL handoff & multi-run reset (#6, ARRIVE_MM=%d):\n", ARRIVE_MM);
     clear_logs();
-    set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20); /* align straight on Ball 3 branch */
+    set_black(0x0); run(TURN90_MS + 40); /* timed 90 deg spin completes without needing sensors */
 #if ARRIVE_MM > 0
     CHECK(left() == BASE_SPEED && right() == BASE_SPEED && strstr(log_txt, "ARRIVED") == NULL,
           "non-zero ARRIVE_MM creeps forward before braking");
@@ -482,6 +519,16 @@ int main(void)
     CHECK(left() < 0 && right() < 0, "Dabble joystick drives immediately after auto-MANUAL handoff");
     pad(0x02, 0x00, 0x00); run(10); /* release joystick */
     CHECK(left() == 0 && right() == 0, "Dabble release stops motors");
+
+    /* MANUAL 'T' command runs the same timed 90 deg left spin (not cut off by BT_TIMEOUT_MS) */
+    clear_logs();
+    *rx_ptr = 'T'; HAL_UART_RxCpltCallback(&huart3); run(10);
+    CHECK(left() == -TURN90_SPEED && right() == TURN90_SPEED, "MANUAL 'T' starts 90 deg left test spin");
+    run(TURN90_MS - 30);
+    CHECK(left() == -TURN90_SPEED && right() == TURN90_SPEED, "MANUAL 'T' spin continues past BT_TIMEOUT_MS until TURN90_MS");
+    run(60);
+    CHECK(left() == 0 && right() == 0 && strstr(log_txt, "TEST 90 done") != NULL,
+          "MANUAL 'T' spin brakes cleanly at TURN90_MS");
 
     /* Multi-run auto-reset: cycle back to AUTO WITHOUT long-press START, run new random color (RED -> Ball 1) */
     press(GPIO_PIN_7, 80); /* MANUAL -> SENSOR */
@@ -503,13 +550,13 @@ int main(void)
     drive_left_junction(0); /* Ball 1 -> LEFT */
     CHECK(left() < 0 && right() > 0, "second run turns LEFT at Ball 1");
     clear_logs();
-    set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20);
+    set_black(0x0); run(TURN90_MS + 40);
 #if ARRIVE_MM > 0
     set_black(0x6); run((uint32_t)ARRIVE_MM * 1000u / SPEED_MM_S + 20);
 #endif
     CHECK(left() == 0 && right() == 0 && strstr(log_txt, "ARRIVED ball 1 -> MANUAL") != NULL
           && led2() && !led3(),
-          "second run aligns straight on Ball 1, stops immediately, and auto-switches to MODE_MANUAL");
+          "second run completes timed 90 deg left turn on Ball 1 and auto-switches to MODE_MANUAL");
     /* Letter command works immediately too */
     *rx_ptr = 'F'; HAL_UART_RxCpltCallback(&huart3); run(10);
     CHECK(left() == MANUAL_SPEED_DEFAULT && right() == MANUAL_SPEED_DEFAULT,

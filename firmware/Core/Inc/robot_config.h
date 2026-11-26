@@ -193,7 +193,7 @@
 #define AIROST_RIGHT_CORNERS   2   /* Figure 1 has two 90 deg right corners before Ball 1 (0 = disable gating) */
 #endif
 #ifndef RIGHT_CORNER_MIN_MS
-#define RIGHT_CORNER_MIN_MS  180   /* sharp right turn (0001 / BEND right) must accumulate this long to count */
+#define RIGHT_CORNER_MIN_MS  250   /* sharp right turn (0001 / BEND right) must accumulate this long to count (real 90 deg corner is 700-1800 ms) */
 #endif
 #ifndef RIGHT_CORNER_GAP_MS
 #define RIGHT_CORNER_GAP_MS 1500   /* minimum gap (ms) after exiting a right corner before next corner counts */
@@ -217,10 +217,30 @@
 #define COLOR_G_SCALE         98
 #endif
 #ifndef COLOR_B_SCALE
-#define COLOR_B_SCALE        165   /* boosted from 145 -> 165 so blue paper reliably beats COLOR_DOM_PCT */
+#define COLOR_B_SCALE        165   /* white-balance B trim (%) matching white mat */
 #endif
 #ifndef COLOR_DOM_PCT
-#define COLOR_DOM_PCT        115   /* lowered 120 -> 115 (white mat is ~101%) to catch softer/cyan-ish blue paper */
+#define COLOR_DOM_PCT        115   /* kept for backwards compatibility; classifier now uses COLOR_REF_* hue rays */
+#endif
+/* Chromaticity references {cr, cg, cb} (per-mille of rn+gn+bn), calibrated from 26 Nov logs + blue screenshot.
+ * Classifier measures distance from WHITE (dW >= COLOR_MIN_DIST) and hue-ray cosine (>= COLOR_MIN_COS). */
+#ifndef COLOR_REF_WHITE
+#define COLOR_REF_WHITE      336, 332, 332
+#endif
+#ifndef COLOR_REF_RED
+#define COLOR_REF_RED        564, 181, 255
+#endif
+#ifndef COLOR_REF_BLUE
+#define COLOR_REF_BLUE       269, 352, 379   /* R=849 G=816 B=521 C=2047 -> dW=84, cos=996 */
+#endif
+#ifndef COLOR_REF_GREEN
+#define COLOR_REF_GREEN      285, 419, 296
+#endif
+#ifndef COLOR_MIN_DIST
+#define COLOR_MIN_DIST        40   /* min chromaticity distance from white mat (white noise ~1..5, real blue ~84) */
+#endif
+#ifndef COLOR_MIN_COS
+#define COLOR_MIN_COS        580   /* min hue-ray cosine (out of 1000) to the nearest colour reference */
 #endif
 #ifndef COLOR_LOCK_SAMPLES
 #define COLOR_LOCK_SAMPLES     4   /* consecutive matching samples (~120 ms) required to lock a colour */
@@ -233,6 +253,33 @@
 #endif
 #ifndef TURN_MIN_MS
 #define TURN_MIN_MS          120   /* minimum spin time (ms) in AS_TURN before accepting a new line */
+#endif
+
+/* ---- Ball turn: simple timed 90 deg left spin, then MANUAL ----
+ * At the target Ball junction the robot spins left for TURN90_MS (sensors ignored), brakes and
+ * switches to MANUAL. TUNE IT: in MANUAL send the letter 'T' (Serial Studio / BT terminal):
+ * the robot does the same spin. Raise TURN90_MS if it turns less than 90 deg, lower it if more. */
+#ifndef TURN90_SPEED
+#define TURN90_SPEED         SEARCH_SPEED  /* spin speed for the 90 deg ball turn */
+#endif
+#ifndef TURN90_MS
+#define TURN90_MS            550   /* spin time for 90 deg at TURN90_SPEED (tune with 'T' in MANUAL) */
+#endif
+#ifndef TURN_ADVANCE_MS
+#define TURN_ADVANCE_MS        0   /* optional: drive straight this long before the spin so the wheels sit
+                                      on the branch (0 = spin right where the junction was seen) */
+#endif
+
+/* ---- Ball zone junction counting (after RIGHT CORNER #2) ---- */
+#ifndef BALL_SETTLE_MS
+#define BALL_SETTLE_MS        80   /* after corner #2: line centred (no outer sensor) this long = "BALL ZONE armed".
+                                      From then on EVERY wide patch is a Ball junction, even if S3 came first */
+#endif
+#ifndef BALL_PULSE_MAX_MS
+#define BALL_PULSE_MAX_MS      0   /* in the Ball zone, also count a 2-sensor left pulse (1100 / 1010, robot
+                                      off-centre) lasting JUNCTION_MIN_MS..this as a Ball junction.
+                                      0 = only LOG it ("2-sensor left pulse"). Try 100 if logs show real
+                                      Ball junctions appearing only as 2-sensor pulses. */
 #endif
 
 #endif
