@@ -669,7 +669,10 @@ static void follow_pd(uint8_t damp)   /* damp 0: no damping (WIDE: 3+ sensors, t
     int corr = (KP * error + KD * d) / 10;      /* error is x10, so divide back */
     int a = error < 0 ? -error : error;
     int base = BASE_SPEED - a * CORNER_SLOW / 10;   /* slow down in bends so it can turn in time */
-    drive(base + corr, base - corr);
+    /* Never reverse an inner wheel during normal PD steering: with MOTOR_MIN > 0, crossing
+     * from +1 to -1 causes a 2*MOTOR_MIN (~520 PWM) reverse kick that creates violent
+     * left-right ping-pong oscillation (26 Nov 19:05 log). Only BEND / TURN reverse wheels. */
+    drive(clamp(base + corr, 0, MAX_SPEED), clamp(base - corr, 0, MAX_SPEED));
 }
 
 static uint32_t mm_to_ms(uint32_t mm) { return mm * 1000u / SPEED_MM_S; }

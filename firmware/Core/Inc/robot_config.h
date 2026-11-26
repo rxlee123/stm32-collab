@@ -53,16 +53,16 @@
 
 /* ---------------- LINE FOLLOWING ----------------
  * Speeds are 0..999 (999 = full power). Start slow, speed up later. */
-#define BASE_SPEED           180  /* straight-line speed (PWM ~393: slower for 90 deg corners, above stall) */
+#define BASE_SPEED           180  /* straight-line speed (PWM ~393: calm, above stall) */
 #define MAX_SPEED            999  /* no wheel is ever driven faster than this    */
-#define KP                   40  /* how hard it steers back to the line (calm, low wobble) */
-#define KD                   200  /* damping: stops it wobbling left-right. Wobbles: raise. Jerky/twitchy: lower */
+#define KP                   60  /* e=-10 -> 90/210 (gentle), e=-20 -> 0/240 (clean pivot, no reverse kick) */
+#define KD                   150  /* gentle damping without slamming inner wheel into reverse */
 #define D_MS                  80  /* how long the damping acts after the line moves (ms). 0 = no damping */
 #define CORNER_SLOW          30  /* slow BOTH wheels in bends: line 2 sensors off-centre = BASE_SPEED - 200.
                                      Raise if it runs wide on bends, 0 = off */
-#define SEARCH_SPEED         200  /* spin speed while looking for a lost line    */
-#define SHARP_OUTER          360  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
-#define SHARP_INNER          120  /* gentle inner reverse so 90 deg corners pivot tightly without overshooting */
+#define SEARCH_SPEED         160  /* calmer spin speed while looking for a lost line / 90 deg corner */
+#define SHARP_OUTER          280  /* sharp bend (only an outer sensor sees the line): outer wheel forward */
+#define SHARP_INNER          0    /* 0 = stop inner wheel (non-zero gets lifted by MOTOR_MIN to harsh reverse!) */
 #define TURN_FWD             0   /* pivot: outer wheel forward  */
 #define TURN_BACK            0   /* pivot: inner wheel backwards *//* ...and inner wheel BACKWARDS at this speed. Raise both = sharper turns */
 
@@ -70,7 +70,7 @@
                                      Raise it if the robot spins inside dashed-line gaps. */
 #define BEND_MEMORY_MS       150  /* line vanishes within this long after a FAR sensor saw it = a corner:
                                      spin towards it at once (0 = off)                              */
-#define BEND_BACK            100  /* corner turn: spin while drifting BACKWARDS by this much, so sensors close
+#define BEND_BACK             80  /* corner turn: spin while drifting BACKWARDS by this much, so sensors close
                                      to the wheels sweep back over the corner. 0 = spin on the spot.
                                      Robot still spins past corners: raise (150). Backs too far: lower (50). */
 #define SEARCH_MS           1800  /* then turn towards where the line was, for at most this long      */
@@ -200,7 +200,7 @@
 #define AIROST_RIGHT_CORNERS   2   /* Figure 1 has two 90 deg right corners before Ball 1 (0 = disable gating) */
 #endif
 #ifndef RIGHT_CORNER_MIN_MS
-#define RIGHT_CORNER_MIN_MS  150   /* sharp right turn (0001 / BEND right) must accumulate this long to count */
+#define RIGHT_CORNER_MIN_MS  180   /* sharp right turn (0001 / BEND right) must accumulate this long to count */
 #endif
 #ifndef RIGHT_CORNER_GAP_MS
 #define RIGHT_CORNER_GAP_MS 1500   /* minimum gap (ms) after exiting a right corner before next corner counts */
