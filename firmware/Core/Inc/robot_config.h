@@ -13,12 +13,12 @@
  * the SENSOR TEST mode: cover the robot's far-left sensor, the first
  * digit printed must change.
  */
-#define S0_PORT  GPIOA      /* far left     (A12) - swapped 20 Nov: centred read 1010 before */
+#define S0_PORT  GPIOA      /* far left     (A12) */
 #define S0_PIN   GPIO_PIN_12
-#define S1_PORT  GPIOA      /* centre left  (A15) */
-#define S1_PIN   GPIO_PIN_15
-#define S2_PORT  GPIOB      /* centre right (LM324 pin 7,  B3)  */
-#define S2_PIN   GPIO_PIN_3
+#define S1_PORT  GPIOB      /* centre left  (LM324 pin 7,  B3) - swapped with A15 26 Nov: sweep read 1000->1010->1110->1111 */
+#define S1_PIN   GPIO_PIN_3
+#define S2_PORT  GPIOA      /* centre right (A15) */
+#define S2_PIN   GPIO_PIN_15
 #define S3_PORT  GPIOB      /* far right    (LM324 pin 1,  B4)  */
 #define S3_PIN   GPIO_PIN_4
 
@@ -86,9 +86,10 @@
 #define TURN_MAX_MS         1500  /* give up a junction turn after this long                          */
 #define SEEK_SETTLE_MS       150  /* after seeking (start box, blind parts...): junctions count only after
                                      the line has been followed this long (box edges are not junctions) */
-#define JUNCTION_MIN_MS       20  /* 3+ sensors must see the line at least this long to count as a junction
-                                     (shorter = a flicker, ignored). Fake J-numbers: raise to 30-40.
-                                     A real junction is missed: lower it.                            */
+/* JUNCTION_MIN_MS is defined below (40 ms in AIROST_MODE, 20 ms in original mode).
+ * 3+ sensors must see the line at least this long to count as a junction
+ * (shorter = a flicker, ignored). Fake J-numbers: raise to 40-50.
+ * A real junction is missed: lower it.                                           */
 #define JUNCTION_GAP_MS      150  /* a new junction is only counted this long after the last one
                                      (stops one messy crossing from counting twice)                  */
 
@@ -184,6 +185,13 @@
  * AIROST_MODE = 0: original UTM Robocon Autocar ROUTE_LIST mode (I2C1 not required). */
 #ifndef AIROST_MODE
 #define AIROST_MODE            1
+#endif
+#ifndef JUNCTION_MIN_MS
+#if AIROST_MODE
+#define JUNCTION_MIN_MS       40   /* ignore brief diagonal wobbles (<40 ms) on Figure 1 while catching real T-junctions */
+#else
+#define JUNCTION_MIN_MS       20
+#endif
 #endif
 #ifndef COLOR_POLL_MS
 #define COLOR_POLL_MS         30   /* non-blocking poll period (ms); ATIME = 24 ms continuous integration */

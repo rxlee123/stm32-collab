@@ -161,16 +161,16 @@ static void clear_logs(void) { log_txt[0] = 0; bt_txt[0] = 0; bt_txt_n = 0; }
 /* Simulate passing over a 90 deg right corner wide patch (0111 -> 0110) */
 static void drive_right_corner(void)
 {
-    set_black(0xE); run(40);
+    set_black(0xE); run(JUNCTION_MIN_MS + 10);
     set_black(0x6); run(220);
 }
 
 /* Simulate crossing a left T-junction (1110, optionally drifting to 1111, then back to 0110) */
 static void drive_left_junction(int drift_all4)
 {
-    set_black(0x7); run(20);
-    if (drift_all4) { set_black(0xF); run(25); }
-    else { run(25); }
+    set_black(0x7); run(JUNCTION_MIN_MS);
+    if (drift_all4) { set_black(0xF); run(15); }
+    else { run(15); }
     set_black(0x6); run(10);
 }
 
@@ -291,6 +291,13 @@ int main(void)
           "brief 0100 brush after long BEND right stays in BEND right (no false GAP straight)");
     set_black(0x6); run(200);
     clear_logs();
+    /* Regression (26 Nov): brief 25 ms diagonal wobble of 1110 must be ignored as flicker */
+    set_black(0x7); run(25);
+    set_black(0x6); run(40);
+    CHECK(left() > 0 && right() > 0 && strstr(log_txt, "NO COLOR") == NULL
+          && strstr(log_txt, "wide flicker") != NULL,
+          "brief 25 ms 1110 diagonal wobble is ignored as wide flicker (no false Ball 1)");
+    clear_logs();
     drive_right_corner();
     CHECK(left() > 0 && right() > 0 && strstr(log_txt, "NO COLOR") == NULL,
           "90 deg right corner #1 (0111) does NOT trigger NO COLOR or shift ball count");
@@ -366,7 +373,7 @@ int main(void)
     drive_right_corner();
     drive_right_corner();
     set_black(0xC); run(12); /* slightly left-of-center approach (S3 active) */
-    set_black(0xF); run(40); /* left branch hits S0+S1 -> 1111 */
+    set_black(0xF); run(JUNCTION_MIN_MS + 10); /* left branch hits S0+S1 -> 1111 */
     set_black(0x6); run(10);
     CHECK(left() < 0 && right() > 0, "RED target turns LEFT at Ball 1 even on 0011->1111 entry");
     set_black(0x0); run(200); set_black(0x2); run(20); /* long spin > JUNCTION_GAP_MS */
