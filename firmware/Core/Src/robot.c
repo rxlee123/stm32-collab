@@ -957,6 +957,11 @@ static void auto_step(uint32_t now)
     case AS_WIDE:
         if (line_bits != 0xF) wide_all_t = now;     /* safety timer counts only while ALL 4 see black */
         if (n >= 3) {
+#if AIROST_MODE
+            /* If far-left S0 turns on at any point during WIDE (e.g. 0111 -> 1111 angled entry
+             * into a Ball left junction), treat it as a left/T junction, never a right corner! */
+            if (line_bits & 1) wide_entry_side = -1;
+#endif
 #if !AIROST_MODE
             /* words that act at once (INVERT, BLIND, PICKUP, DROP): as soon as the patch is a real one */
             if (!wide_nocount && act_is_instant(next_step().act) && now - state_t0 >= JUNCTION_MIN_MS) {

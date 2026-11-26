@@ -408,13 +408,14 @@ int main(void)
     press(GPIO_PIN_6, 80); /* resume */
     run(20);
     CHECK(led3(), "resuming after short-press START preserves latched color (LED3 stays ON)");
-    /* Pass both 90 deg right corners, then hit Ball 1 via 0011 -> 1111 (S3 active just prior) -> still counts Ball 1! */
+    /* Pass both 90 deg right corners, then hit Ball 1 via 0111 -> 1111 (angled entry: S3 first, then S0!) -> MUST turn LEFT! */
     drive_right_corner();
     drive_right_corner();
     set_black(0xC); run(12); /* slightly left-of-center approach (S3 active) */
-    set_black(0xF); run(JUNCTION_MIN_MS + 10); /* left branch hits S0+S1 -> 1111 */
+    set_black(0xE); run(8);  /* 0111 for 8 ms before S0 hits the left branch (26 Nov 20:39 log) */
+    set_black(0xF); run(JUNCTION_MIN_MS + 20); /* left branch hits S0 -> 1111 */
     set_black(0x6); run(10);
-    CHECK(left() < 0 && right() > 0, "RED target turns LEFT at Ball 1 even on 0011->1111 entry");
+    CHECK(left() < 0 && right() > 0, "RED target turns LEFT at Ball 1 even on 0111->1111 angled entry");
     set_black(0x0); run(200); set_black(0x2); run(20); /* long spin > JUNCTION_GAP_MS */
     CHECK(strstr(log_txt, "turn done") != NULL, "RED turn completes onto Ball 1 branch");
     /* Residual tee overlap immediately after turn done must NOT trigger premature arrival */
