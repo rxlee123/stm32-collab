@@ -48,15 +48,15 @@
  * Find it: raise it until a wheel always turns in sharp corners; if the robot
  * jerks or is too fast in gentle steering, lower it. 0 = off.                */
 #ifndef MOTOR_MIN
-#define MOTOR_MIN            200
+#define MOTOR_MIN            280
 #endif
 
 /* ---------------- LINE FOLLOWING ----------------
  * Speeds are 0..999 (999 = full power). Start slow, speed up later. */
-#define BASE_SPEED           200  /* straight-line speed                         */
+#define BASE_SPEED           220  /* straight-line speed                         */
 #define MAX_SPEED            999  /* no wheel is ever driven faster than this    */
-#define KP                   45  /* how hard it steers back to the line (lowered from main's 70 to reduce wobble) */
-#define KD                   350  /* damping: stops it wobbling left-right. Wobbles: raise. Jerky/twitchy: lower */
+#define KP                   40  /* how hard it steers back to the line (calm, low wobble) */
+#define KD                   200  /* damping: stops it wobbling left-right. Wobbles: raise. Jerky/twitchy: lower */
 #define D_MS                  80  /* how long the damping acts after the line moves (ms). 0 = no damping */
 #define CORNER_SLOW          30  /* slow BOTH wheels in bends: line 2 sensors off-centre = BASE_SPEED - 200.
                                      Raise if it runs wide on bends, 0 = off */
