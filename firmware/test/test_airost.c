@@ -399,6 +399,9 @@ int main(void)
     CHECK(led3() && strstr(log_txt, "COLOR LOCKED: RED -> BALL 1") != NULL
           && strstr(bt_txt, "COLOR LOCKED: RED -> BALL 1") != NULL,
           "COLOR_LOCK_SAMPLES consecutive RED samples lock Ball 1, light LED3 solid ON, and log to USB & BT");
+    run(BT_STATUS_MS + 10);
+    CHECK(strstr(bt_txt, "col=RED(B1)") != NULL,
+          "AUTO status line on Bluetooth shows locked colour col=RED(B1)");
     /* Short-press START pauses without wiping latched color */
     press(GPIO_PIN_6, 80); /* pause -> AS_IDLE */
     CHECK(left() == 0 && right() == 0, "short-press START pauses AUTO");

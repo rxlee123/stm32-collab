@@ -1390,11 +1390,28 @@ static void print_status(uint32_t now)
     /* shorter line for the phone (Bluetooth is slower than the cable) */
     if (BT_DEBUG >= 2 && now - bt_status_t >= BT_STATUS_MS) {
         bt_status_t = now;
+#if AIROST_MODE
+        char col[20] = "";
+        if (mode == MODE_AUTO) {
+            if (color_count > 0)
+                snprintf(col, sizeof col, " col=%s(B%d)", COLOR_NAME[color_slots[0]], color_to_ball(color_slots[0]));
+            else if (tcs_err)
+                snprintf(col, sizeof col, " col=ERR");
+            else
+                snprintf(col, sizeof col, " col=%s", COLOR_NAME[color_now]);
+        }
+        snprintf(s, sizeof s, "%s %s b=%d%d%d%d e=%d L=%d R=%d j=%d%s%s\r\n",
+                 MODE_NAME[mode], mode == MODE_AUTO ? STATE_NAME[astate] : "-",
+                 black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1,
+                 error, speed_l, speed_r, mode == MODE_SENSOR_TEST ? st_count : junction_index,
+                 inverted ? " WHITE" : "", col);
+#else
         snprintf(s, sizeof s, "%s %s b=%d%d%d%d e=%d L=%d R=%d j=%d%s\r\n",
                  MODE_NAME[mode], mode == MODE_AUTO ? STATE_NAME[astate] : "-",
                  black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1,
                  error, speed_l, speed_r, mode == MODE_SENSOR_TEST ? st_count : junction_index,
                  inverted ? " WHITE" : "");
+#endif
         bt_print(s);
 #if AIROST_MODE
         if (mode == MODE_SENSOR_TEST) {
@@ -1507,7 +1524,7 @@ void Robot_Loop(void)
     black_bits = read_black_bits();
     line_bits = inverted ? (uint8_t)(~black_bits & 0x0F) : black_bits;
 #if AIROST_MODE
-    if (mode == MODE_SENSOR_TEST) (void)tcs_poll(now);
+    if (mode == MODE_SENSOR_TEST || (mode == MODE_AUTO && !running)) (void)tcs_poll(now);
     else if (mode == MODE_AUTO && running && seen_line) airost_color_step(now);
 #endif
 
