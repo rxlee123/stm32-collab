@@ -272,14 +272,23 @@ int main(void)
     return_to_auto_and_reset();
     printf("AIROST AUTO latching, routing & NO COLOR failsafe (#5):\n");
 
-    /* Test A: NO COLOR failsafe (even after passing Figure 1's two 90 deg right corners) */
+    /* Test A: Start box 2 s straight blind exit + NO COLOR failsafe */
     clear_logs();
     tcs_set_white(); /* white floor only */
+    set_black(0x0);  /* inside white start box */
+    press(GPIO_PIN_6, 80); /* START AUTO -> enters AS_BLIND for START_BLIND_MS (2000 ms) */
+    run(START_RAMP_MS + 100);
+    set_black(0x1); run(300); /* touching start box border must NOT turn/circle the box */
+    CHECK(left() == BASE_SPEED && right() == BASE_SPEED,
+          "start box blind exit drives straight even when touching box wall (1000)");
+    set_black(0xF); run(300); /* crossing front box wall must NOT count as junction */
+    CHECK(left() == BASE_SPEED && right() == BASE_SPEED && strstr(log_txt, "NO COLOR") == NULL,
+          "start box front wall (1111) is ignored during 2 s straight exit");
     set_black(0x6);
-    press(GPIO_PIN_6, 80); /* START AUTO */
-    run(200);
+    run(START_BLIND_MS); /* finish 2 s blind exit into AS_FOLLOW */
     CHECK(htim3.pwm_on[4] && htim3.ccr[4] == SERVO_OPEN_US, "AIROST AUTO starts with gripper OPEN");
-    CHECK(!led3(), "LED3 stays OFF before any color latches");
+    CHECK(!led3() && strstr(log_txt, "start box exit done") != NULL,
+          "start box 2 s exit completes cleanly into line following with LED3 OFF");
     /* Regression (26 Nov log): long BEND right (> BEND_MEMORY_MS) + 1-tick brush of 0100 -> 0000
      * must stay in BEND right instead of falsely dropping into GAP, straight */
     clear_logs();
@@ -293,7 +302,7 @@ int main(void)
     /* Reset after BEND right test (which counted as a right corner) so corner gating starts from rc=0 */
     press(GPIO_PIN_6, 80);
     press(GPIO_PIN_6, LONG_PRESS_MS + 100);
-    set_black(0x6); press(GPIO_PIN_6, 80); run(200);
+    set_black(0x6); press(GPIO_PIN_6, 80); run(START_BLIND_MS + JUNCTION_GAP_MS + 50);
     clear_logs();
     /* Regression (26 Nov): brief 25 ms diagonal wobble of 1110 must be ignored as flicker */
     set_black(0x7); run(25);
@@ -359,7 +368,7 @@ int main(void)
     tcs_force_err = HAL_ERROR;
     set_black(0x6);
     press(GPIO_PIN_6, 80);
-    run(200);
+    run(START_BLIND_MS + 200);
     set_black(0x2); run(20);
     CHECK(left() < right(), "I2C fault during AUTO does not affect 2 ms IR steering");
     set_black(0x6); run(100);
@@ -377,13 +386,13 @@ int main(void)
     tcs_set_white();
     set_black(0x0); /* start box (not yet seen_line) */
     press(GPIO_PIN_6, 80);
-    /* Red shown BEFORE seen_line must NOT lock */
+    /* Red shown during start-box blind exit (seen_line == 0) must NOT lock */
     tcs_set_rgbc(900, 200, 200, 1400);
-    run(120);
+    run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 2));
     CHECK(!led3() && strstr(log_txt, "COLOR LOCKED") == NULL,
-          "color does NOT latch before line is acquired (seen_line == 0)");
+          "color does NOT latch during start-box blind exit (seen_line == 0)");
     tcs_set_white();
-    set_black(0x6); run(SEEK_SETTLE_MS + 50); /* acquire line steadily */
+    set_black(0x6); run(START_BLIND_MS + 50); /* finish start-box exit -> seen_line == 1 */
     /* Glitch shorter than COLOR_LOCK_SAMPLES (4 samples) must NOT lock */
     tcs_set_rgbc(150, 180, 700, 1100);
     run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES - 1));
@@ -399,12 +408,14 @@ int main(void)
     CHECK(led3() && strstr(log_txt, "COLOR LOCKED: RED -> BALL 1") != NULL
           && strstr(bt_txt, "COLOR LOCKED: RED -> BALL 1") != NULL,
           "COLOR_LOCK_SAMPLES consecutive RED samples lock Ball 1, light LED3 solid ON, and log to USB & BT");
-    /* Short-press START pauses without wiping latched color */
+    /* Short-press START pauses without wiping latched color or re-running start-box blind exit */
     press(GPIO_PIN_6, 80); /* pause -> AS_IDLE */
     CHECK(left() == 0 && right() == 0, "short-press START pauses AUTO");
+    clear_logs();
     press(GPIO_PIN_6, 80); /* resume */
     run(20);
-    CHECK(led3(), "resuming after short-press START preserves latched color (LED3 stays ON)");
+    CHECK(led3() && strstr(log_txt, "start box straight") == NULL,
+          "resuming after short-press START preserves latched color and skips start-box blind exit");
     /* Pass both 90 deg right corners, then hit Ball 1 via 0011 -> 1111 (S3 active just prior) -> still counts Ball 1! */
     drive_right_corner();
     drive_right_corner();
@@ -425,7 +436,7 @@ int main(void)
     press(GPIO_PIN_6, LONG_PRESS_MS + 100); /* reset */
     clear_logs();
     tcs_set_white();
-    set_black(0x6); press(GPIO_PIN_6, 80); run(60);
+    set_black(0x6); press(GPIO_PIN_6, 80); run(START_BLIND_MS + 60);
     tcs_set_rgbc(140, 180, 680, 1050); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(strstr(log_txt, "COLOR LOCKED: BLUE -> BALL 2") != NULL, "BLUE locks Ball 2");
@@ -442,7 +453,7 @@ int main(void)
     press(GPIO_PIN_6, LONG_PRESS_MS + 100); /* reset */
     clear_logs();
     tcs_set_white();
-    set_black(0x6); press(GPIO_PIN_6, 80); run(60);
+    set_black(0x6); press(GPIO_PIN_6, 80); run(START_BLIND_MS + 60);
     tcs_set_rgbc(160, 640, 170, 1020); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
     CHECK(strstr(log_txt, "COLOR LOCKED: GREEN -> BALL 3") != NULL, "GREEN locks Ball 3");
@@ -494,7 +505,7 @@ int main(void)
     tcs_set_white();
     set_black(0x6);
     press(GPIO_PIN_6, 80); /* START AUTO directly (no long-press reset) */
-    run(520); /* allow smooth servo ramp from CLOSED back to OPEN */
+    run(START_BLIND_MS + 60); /* complete 2 s start-box straight exit & smooth servo ramp back to OPEN */
     CHECK(!led3() && htim3.ccr[4] == SERVO_OPEN_US,
           "next AUTO run starts reset (LED3 OFF, gripper OPEN) without manual long-press");
     tcs_set_rgbc(900, 200, 200, 1400); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
@@ -529,7 +540,7 @@ int main(void)
     press(GPIO_PIN_7, 80); press(GPIO_PIN_7, 80); press(GPIO_PIN_7, 80); /* MANUAL -> AUTO */
     clear_logs();
     tcs_set_white(); set_black(0x6);
-    press(GPIO_PIN_6, 80); run(60);
+    press(GPIO_PIN_6, 80); run(START_BLIND_MS + 60);
     tcs_set_rgbc(900, 200, 200, 1400); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));
     tcs_set_white(); run(COLOR_POLL_MS * 2);
     tcs_set_rgbc(140, 180, 680, 1050); run(COLOR_POLL_MS * (COLOR_LOCK_SAMPLES + 1));

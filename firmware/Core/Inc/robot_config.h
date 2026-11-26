@@ -55,7 +55,7 @@
  * Speeds are 0..999 (999 = full power). Start slow, speed up later. */
 #define BASE_SPEED           180  /* straight-line speed (PWM ~393: calm, above stall) */
 #define MAX_SPEED            999  /* no wheel is ever driven faster than this    */
-#define KP                   60  /* e=-10 -> 90/210 (gentle), e=-20 -> 0/240 (clean pivot, no reverse kick) */
+#define KP                   45  /* lowered from 60 -> 45 for calmer, smoother tracking */
 #define KD                   150  /* gentle damping without slamming inner wheel into reverse */
 #define D_MS                  80  /* how long the damping acts after the line moves (ms). 0 = no damping */
 #define CORNER_SLOW          30  /* slow BOTH wheels in bends: line 2 sensors off-centre = BASE_SPEED - 200.
@@ -207,6 +207,13 @@
 #endif
 #ifndef TBAR_MIN_MS
 #define TBAR_MIN_MS           20   /* on a ball branch, require all 4 sensors (1111) this long for end T-bar */
+#endif
+#ifndef START_BLIND_MS
+#if AIROST_MODE
+#define START_BLIND_MS      2000   /* drive straight 2 s out of start box ignoring box walls before line following */
+#else
+#define START_BLIND_MS         0
+#endif
 #endif
 #ifndef COLOR_POLL_MS
 #define COLOR_POLL_MS         30   /* non-blocking poll period (ms); ATIME = 24 ms continuous integration */

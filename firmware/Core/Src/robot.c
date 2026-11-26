@@ -132,6 +132,9 @@
 #ifndef TBAR_MIN_MS
 #define TBAR_MIN_MS          20
 #endif
+#ifndef START_BLIND_MS
+#define START_BLIND_MS        0
+#endif
 
 extern TIM_HandleTypeDef htim2;   /* motor PWM: CH1 = A0, CH4 = A3 */
 extern TIM_HandleTypeDef htim3;   /* servo PWM: CH4 = B1           */
@@ -272,6 +275,7 @@ static AirostPhase     airost_phase;
 static uint8_t         airost_ball_count;
 static uint8_t         airost_right_corners;
 static uint8_t         in_right_corner;
+static uint8_t         start_blind_done;
 static uint32_t        right_turn_ms, last_right_corner_t;
 static int8_t          wide_entry_side;   /* -1 left-first, +1 right-only, 0 simultaneous */
 #endif
@@ -547,6 +551,7 @@ static void airost_reset(void)
     airost_ball_count = 0;
     airost_right_corners = 0;
     in_right_corner = 0;
+    start_blind_done = 0;
     right_turn_ms = 0;
     last_right_corner_t = 0;
     wide_entry_side = 0;
@@ -1029,7 +1034,23 @@ static void auto_step(uint32_t now)
 
     case AS_BLIND:                              /* straight ahead, sensors ignored */
         drive(BASE_SPEED, BASE_SPEED);
-        if (now - state_t0 >= seq_ms) { log_msg("  blind part done, looking for the line\r\n"); seek_line(now); }
+        if (now - state_t0 >= seq_ms) {
+#if AIROST_MODE
+            if (!start_blind_done) {
+                start_blind_done = 1;
+                seen_line = 1;
+                was_lost = 0;
+                last_error = error = 0;
+                left_seen_t = right_seen_t = wide_seen_t = now - 10000;
+                last_junc_t = now;
+                log_msg("  start box exit done, following line\r\n");
+                auto_enter(AS_FOLLOW, now);
+                return;
+            }
+#endif
+            log_msg("  blind part done, looking for the line\r\n");
+            seek_line(now);
+        }
         return;
 
     case AS_PICKUP:                             /* drive in, close the gate, turn round */
@@ -1084,6 +1105,13 @@ static void auto_start(uint32_t now)
     in_right_corner = 0;
     if (airost_right_corners == 0) last_right_corner_t = now - RIGHT_CORNER_GAP_MS;
     servo_set(SERVO_OPEN_US);
+    if (START_BLIND_MS > 0 && !start_blind_done) {
+        seen_line = 0;
+        seq_ms = START_BLIND_MS;
+        auto_enter(AS_BLIND, now);
+        log_msg("AUTO: GO (start box straight %lums)\r\n", (unsigned long)seq_ms);
+        return;
+    }
 #else
     servo_set(SERVO_AUTO_US);
 #endif
