@@ -555,6 +555,13 @@ static void airost_reset(void)
 static void airost_record_color(DetectedColor c)
 {
     if (color_count < 3) color_slots[color_count++] = c;
+    if (color_count == 1) {
+        /* Color 1 is on the top straightaway before both 90 deg right corners:
+         * wipe any start-box exit wobble from the right-corner counter. */
+        airost_right_corners = 0;
+        in_right_corner = 0;
+        right_turn_ms = 0;
+    }
     color_patch_state = CP_LOCKED;
     log_msg("COLOR LOCKED: %s -> BALL %d (rn=%u gn=%u bn=%u C=%u)\r\n",
             COLOR_NAME[c], color_to_ball(c), norm_r, norm_g, norm_b, raw_c);

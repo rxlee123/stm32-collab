@@ -15,10 +15,10 @@
  */
 #define S0_PORT  GPIOA      /* far left     (A12) */
 #define S0_PIN   GPIO_PIN_12
-#define S1_PORT  GPIOB      /* centre left  (LM324 pin 7,  B3) - swapped with A15 26 Nov: sweep read 1000->1010->1110->1111 */
-#define S1_PIN   GPIO_PIN_3
-#define S2_PORT  GPIOA      /* centre right (A15) */
-#define S2_PIN   GPIO_PIN_15
+#define S1_PORT  GPIOA      /* centre left  (A15) - restored 26 Nov: 20:39 & 20:52 logs showed 1010/0101 (never 1100/0011) */
+#define S1_PIN   GPIO_PIN_15
+#define S2_PORT  GPIOB      /* centre right (LM324 pin 7,  B3)  */
+#define S2_PIN   GPIO_PIN_3
 #define S3_PORT  GPIOB      /* far right    (LM324 pin 1,  B4)  */
 #define S3_PIN   GPIO_PIN_4
 
