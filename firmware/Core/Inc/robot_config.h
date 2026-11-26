@@ -86,12 +86,8 @@
 #define TURN_MAX_MS         1500  /* give up a junction turn after this long                          */
 #define SEEK_SETTLE_MS       150  /* after seeking (start box, blind parts...): junctions count only after
                                      the line has been followed this long (box edges are not junctions) */
-/* JUNCTION_MIN_MS is defined below (40 ms in AIROST_MODE, 20 ms in original mode).
- * 3+ sensors must see the line at least this long to count as a junction
- * (shorter = a flicker, ignored). Fake J-numbers: raise to 40-50.
- * A real junction is missed: lower it.                                           */
-#define JUNCTION_GAP_MS      150  /* a new junction is only counted this long after the last one
-                                     (stops one messy crossing from counting twice)                  */
+/* JUNCTION_MIN_MS and JUNCTION_GAP_MS are defined below (AIROST_MODE uses longer values
+ * to ignore wide-tape straight-line wobbles and space out the 20 cm Ball 1/2/3 junctions). */
 
 /* ---------------- DISTANCES ----------------
  * R_BLIND(mm), R_PICKUP(mm), R_DROP(mm) and FINISH_MM are distances in millimetres.
@@ -188,10 +184,29 @@
 #endif
 #ifndef JUNCTION_MIN_MS
 #if AIROST_MODE
-#define JUNCTION_MIN_MS       40   /* ignore brief diagonal wobbles (<40 ms) on Figure 1 while catching real T-junctions */
+#define JUNCTION_MIN_MS       50   /* ignore brief wide-tape wobbles (<50 ms) while catching real T-junctions */
 #else
 #define JUNCTION_MIN_MS       20
 #endif
+#endif
+#ifndef JUNCTION_GAP_MS
+#if AIROST_MODE
+#define JUNCTION_GAP_MS      350   /* Ball 1/2/3 are 20 cm (~650 ms) apart; ignore post-corner/junction wobbles */
+#else
+#define JUNCTION_GAP_MS      150
+#endif
+#endif
+#ifndef AIROST_RIGHT_CORNERS
+#define AIROST_RIGHT_CORNERS   2   /* Figure 1 has two 90 deg right corners before Ball 1 (0 = disable gating) */
+#endif
+#ifndef RIGHT_CORNER_MIN_MS
+#define RIGHT_CORNER_MIN_MS   80   /* sharp right turn (0001 / BEND right) must accumulate this long to count */
+#endif
+#ifndef RIGHT_CORNER_GAP_MS
+#define RIGHT_CORNER_GAP_MS 1000   /* minimum gap (ms) between right corners (60 cm apart on Figure 1) */
+#endif
+#ifndef TBAR_MIN_MS
+#define TBAR_MIN_MS           20   /* on a ball branch, require all 4 sensors (1111) this long for end T-bar */
 #endif
 #ifndef COLOR_POLL_MS
 #define COLOR_POLL_MS         30   /* non-blocking poll period (ms); ATIME = 24 ms continuous integration */

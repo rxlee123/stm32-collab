@@ -158,11 +158,12 @@ static void bt_send(const uint8_t *b, int n) { for (int k = 0; k < n; k++) { *rx
 static void pad(uint8_t fn, uint8_t buttons, uint8_t v) { uint8_t f[8] = {0xFF, 0x01, fn, 0x01, 0x02, buttons, v, 0x00}; bt_send(f, 8); }
 static void clear_logs(void) { log_txt[0] = 0; bt_txt[0] = 0; bt_txt_n = 0; }
 
-/* Simulate passing over a 90 deg right corner wide patch (0111 -> 0110) */
+/* Simulate passing a 90 deg right corner (0111 -> sharp 0001/BEND right -> straightaway) */
 static void drive_right_corner(void)
 {
     set_black(0xE); run(JUNCTION_MIN_MS + 10);
-    set_black(0x6); run(220);
+    set_black(0x8); run(RIGHT_CORNER_MIN_MS + 20);
+    set_black(0x6); run(RIGHT_CORNER_GAP_MS + 100);
 }
 
 /* Simulate crossing a left T-junction (1110, optionally drifting to 1111, then back to 0110) */
@@ -289,7 +290,10 @@ int main(void)
     set_black(0x0); run(20);                   /* off the line again */
     CHECK(left() > 0 && right() < 0 && strstr(log_txt, "GAP, straight") == NULL,
           "brief 0100 brush after long BEND right stays in BEND right (no false GAP straight)");
-    set_black(0x6); run(200);
+    /* Reset after BEND right test (which counted as a right corner) so corner gating starts from rc=0 */
+    press(GPIO_PIN_6, 80);
+    press(GPIO_PIN_6, LONG_PRESS_MS + 100);
+    set_black(0x6); press(GPIO_PIN_6, 80); run(200);
     clear_logs();
     /* Regression (26 Nov): brief 25 ms diagonal wobble of 1110 must be ignored as flicker */
     set_black(0x7); run(25);
@@ -297,13 +301,36 @@ int main(void)
     CHECK(left() > 0 && right() > 0 && strstr(log_txt, "NO COLOR") == NULL
           && strstr(log_txt, "wide flicker") != NULL,
           "brief 25 ms 1110 diagonal wobble is ignored as wide flicker (no false Ball 1)");
+    /* Regression (26 Nov wide tape): sustained 70 ms 1110 drift on top straightaway (rc=0/2) is skipped */
+    clear_logs();
+    set_black(0x7); run(70);
+    set_black(0x6); run(40);
+    CHECK(left() > 0 && right() > 0 && strstr(log_txt, "J-skip pre-corner") != NULL
+          && strstr(log_txt, "NO COLOR") == NULL,
+          "wide-tape 1110 drift on top straightaway (rc=0/2) is skipped without triggering NO COLOR");
+    /* Brief 20 ms 0001 glitch on straightaway must NOT count as a 90 deg right corner */
+    clear_logs();
+    set_black(0x8); run(20);
+    set_black(0x6); run(100);
+    CHECK(strstr(log_txt, "RIGHT CORNER") == NULL,
+          "brief 20 ms 0001 glitch does NOT count as a 90 deg right corner");
     clear_logs();
     drive_right_corner();
-    CHECK(left() > 0 && right() > 0 && strstr(log_txt, "NO COLOR") == NULL,
-          "90 deg right corner #1 (0111) does NOT trigger NO COLOR or shift ball count");
+    CHECK(left() > 0 && right() > 0 && strstr(log_txt, "RIGHT CORNER #1") != NULL
+          && strstr(log_txt, "NO COLOR") == NULL,
+          "90 deg right corner #1 counts RIGHT CORNER #1 and does NOT trigger NO COLOR");
+    /* Sustained 1110 drift between Corner #1 and Corner #2 (rc=1/2) is also skipped */
+    clear_logs();
+    set_black(0x7); run(70);
+    set_black(0x6); run(40);
+    CHECK(left() > 0 && right() > 0 && strstr(log_txt, "J-skip pre-corner") != NULL
+          && strstr(log_txt, "NO COLOR") == NULL,
+          "wide-tape 1110 drift on right straightaway (rc=1/2) is skipped");
+    clear_logs();
     drive_right_corner();
-    CHECK(left() > 0 && right() > 0 && strstr(log_txt, "NO COLOR") == NULL,
-          "90 deg right corner #2 (0111) does NOT trigger NO COLOR or shift ball count");
+    CHECK(left() > 0 && right() > 0 && strstr(log_txt, "RIGHT CORNER #2") != NULL
+          && strstr(log_txt, "NO COLOR") == NULL,
+          "90 deg right corner #2 counts RIGHT CORNER #2 and arms Ball 1..3");
     drive_left_junction(0); /* Ball 1 with no color latched */
     run(20);
     CHECK(left() == 0 && right() == 0 && strstr(log_txt, "NO COLOR") != NULL,
@@ -329,6 +356,8 @@ int main(void)
     set_black(0x2); run(20);
     CHECK(left() < right(), "I2C fault during AUTO does not affect 2 ms IR steering");
     set_black(0x6); run(100);
+    drive_right_corner();
+    drive_right_corner();
     drive_left_junction(0);
     run(20);
     CHECK(left() == 0 && right() == 0 && strstr(log_txt, "NO COLOR") != NULL,
@@ -424,9 +453,15 @@ int main(void)
     /* ---- Slice 3 (#6): Ball T-bar arrival, automatic MODE_MANUAL handoff & multi-run reset ---- */
     printf("Ball T-bar arrival, MODE_MANUAL handoff & multi-run reset (#6, ARRIVE_MM=%d):\n", ARRIVE_MM);
     set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20); /* complete left turn onto Ball 3 branch */
-    set_black(0x6); run(220); /* drive along Ball 3 branch */
+    set_black(0x6); run(JUNCTION_GAP_MS + 40); /* drive along Ball 3 branch */
     clear_logs();
-    set_black(0xF); run(JUNCTION_MIN_MS + 10); /* hit Ball 3 end T-bar */
+    /* Mid-branch wide-tape wobble (1110) must NOT prematurely trigger arrival */
+    set_black(0x7); run(JUNCTION_MIN_MS + 20);
+    set_black(0x6); run(JUNCTION_GAP_MS + 40);
+    CHECK(strstr(log_txt, "ARRIVED") == NULL && left() > 0 && right() > 0,
+          "mid-branch 1110 wobble does NOT prematurely trigger T-bar arrival");
+    clear_logs();
+    set_black(0xF); run(TBAR_MIN_MS + 10); /* hit Ball 3 end T-bar (1111) */
 #if ARRIVE_MM > 0
     CHECK(left() == BASE_SPEED && right() == BASE_SPEED && strstr(log_txt, "ARRIVED") == NULL,
           "non-zero ARRIVE_MM creeps forward before braking");
@@ -464,10 +499,11 @@ int main(void)
     drive_left_junction(0); /* Ball 1 -> LEFT */
     CHECK(left() < 0 && right() > 0, "second run turns LEFT at Ball 1");
     set_black(0x0); run(TURN_MIN_MS + 40); set_black(0x2); run(20);
-    set_black(0x6); run(220);
+    set_black(0x6); run(JUNCTION_GAP_MS + 40);
     clear_logs();
-    /* Asymmetric T-bar hit (0111) on ball branch still triggers arrival */
-    set_black(0xE); run(JUNCTION_MIN_MS + 10);
+    /* Asymmetric T-bar entry (0111 -> 1111 as remaining sensor hits 15 cm T-bar) triggers arrival */
+    set_black(0xE); run(10);
+    set_black(0xF); run(TBAR_MIN_MS + 10);
 #if ARRIVE_MM > 0
     set_black(0x0); run((uint32_t)ARRIVE_MM * 1000u / SPEED_MM_S + 20);
 #endif

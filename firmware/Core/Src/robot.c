@@ -120,6 +120,18 @@
 #ifndef TURN_MIN_MS
 #define TURN_MIN_MS         120
 #endif
+#ifndef AIROST_RIGHT_CORNERS
+#define AIROST_RIGHT_CORNERS  2
+#endif
+#ifndef RIGHT_CORNER_MIN_MS
+#define RIGHT_CORNER_MIN_MS  80
+#endif
+#ifndef RIGHT_CORNER_GAP_MS
+#define RIGHT_CORNER_GAP_MS 1000
+#endif
+#ifndef TBAR_MIN_MS
+#define TBAR_MIN_MS          20
+#endif
 
 extern TIM_HandleTypeDef htim2;   /* motor PWM: CH1 = A0, CH4 = A3 */
 extern TIM_HandleTypeDef htim3;   /* servo PWM: CH4 = B1           */
@@ -258,6 +270,8 @@ static DetectedColor   color_cand;
 static uint8_t         color_cand_hits;
 static AirostPhase     airost_phase;
 static uint8_t         airost_ball_count;
+static uint8_t         airost_right_corners;
+static uint32_t        right_turn_ms, last_right_corner_t;
 static int8_t          wide_entry_side;   /* -1 left-first, +1 right-only, 0 simultaneous */
 #endif
 
@@ -530,6 +544,9 @@ static void airost_reset(void)
     color_cand_hits = 0;
     airost_phase = AIROST_SEEK_BALL;
     airost_ball_count = 0;
+    airost_right_corners = 0;
+    right_turn_ms = 0;
+    last_right_corner_t = 0;
     wide_entry_side = 0;
 }
 
@@ -742,10 +759,18 @@ static void airost_complete_arrival(uint32_t now)
 
 static void start_junction_action(uint32_t now)
 {
+    unsigned long dur = (unsigned long)(now - state_t0);
     last_junc_t = now;
     if (airost_phase == AIROST_SEEK_BALL) {
         if (wide_entry_side > 0) {
-            log_msg("J-skip RIGHT corner (R_FOLLOW) b=%d%d%d%d\r\n",
+            log_msg("J-skip RIGHT corner (R_FOLLOW, %lums) b=%d%d%d%d\r\n", dur,
+                    black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1);
+            auto_enter(AS_FOLLOW, now);
+            return;
+        }
+        if (airost_right_corners < AIROST_RIGHT_CORNERS) {
+            log_msg("J-skip pre-corner (rc=%u/%u, %lums) b=%d%d%d%d\r\n",
+                    airost_right_corners, (unsigned)AIROST_RIGHT_CORNERS, dur,
                     black_bits & 1, (black_bits >> 1) & 1, (black_bits >> 2) & 1, (black_bits >> 3) & 1);
             auto_enter(AS_FOLLOW, now);
             return;
@@ -754,16 +779,16 @@ static void start_junction_action(uint32_t now)
         if (target == 0) {
             brake();
             auto_enter(AS_LOST, now);
-            debug_print("NO COLOR: stopped at ball 1\r\n");
+            log_msg("NO COLOR: stopped at ball 1 (%lums)\r\n", dur);
             return;
         }
         airost_ball_count++;
         junction_index = airost_ball_count;
         if (airost_ball_count < target) {
-            log_msg("J%d STRAIGHT (target ball %d)\r\n", airost_ball_count, target);
+            log_msg("J%d STRAIGHT (target ball %d, %lums)\r\n", airost_ball_count, target, dur);
             auto_enter(AS_CROSS, now);
         } else {
-            log_msg("J%d LEFT -> ball %d\r\n", airost_ball_count, target);
+            log_msg("J%d LEFT -> ball %d (%lums)\r\n", airost_ball_count, target, dur);
             turn_dir = -1;
             turn_left_line = 0;
             airost_phase = AIROST_ON_BALL_BRANCH;
@@ -794,6 +819,26 @@ static void auto_step(uint32_t now)
     /* centred again: forget it. But NOT just after a 3-sensor patch: at a corner the line
      * can be centred for a moment before it vanishes, and the side must be remembered. */
     if (line_bits == 0x6 && now - wide_seen_t > BEND_MEMORY_MS) left_seen_t = right_seen_t = now - 10000;
+
+#if AIROST_MODE
+    /* Count Figure 1's two 90 deg right corners (sustained 0001 / BEND right) so wide-tape
+     * 1110 drifts on the top/right straightaways cannot falsely trigger Ball 1 / NO COLOR. */
+    if (astate == AS_FOLLOW && airost_phase == AIROST_SEEK_BALL && seen_line) {
+        uint8_t sharp_r = (line_bits == 0x8) || (n == 0 && was_lost && exit_side > 0);
+        if (sharp_r) {
+            last_junc_t = now;
+            if (right_turn_ms < 10000) right_turn_ms += LOOP_MS;
+            if (right_turn_ms >= RIGHT_CORNER_MIN_MS && now - last_right_corner_t >= RIGHT_CORNER_GAP_MS) {
+                airost_right_corners++;
+                last_right_corner_t = now;
+                right_turn_ms = 0;
+                log_msg("RIGHT CORNER #%u\r\n", airost_right_corners);
+            }
+        } else if (line_bits == 0x6 || (line_bits & 1)) {
+            right_turn_ms = 0;
+        }
+    }
+#endif
 
     switch (astate) {
     case AS_IDLE: case AS_LOST: case AS_FINISHED:
@@ -905,8 +950,10 @@ static void auto_step(uint32_t now)
                 return;
             }
 #else
-            /* On a ball branch, the end T-bar acts immediately once confirmed (>= JUNCTION_MIN_MS) */
-            if (!wide_nocount && airost_phase == AIROST_ON_BALL_BRANCH && now - state_t0 >= JUNCTION_MIN_MS) {
+            /* On a ball branch, require all 4 sensors (1111) for TBAR_MIN_MS so a wide-tape
+             * wobble (1110/0111) never stops early, while the 15 cm end T-bar brakes right at the ball. */
+            if (!wide_nocount && airost_phase == AIROST_ON_BALL_BRANCH
+                && line_bits == 0xF && now - wide_all_t >= TBAR_MIN_MS) {
                 start_junction_action(now);
                 return;
             }
@@ -933,6 +980,12 @@ static void auto_step(uint32_t now)
             log_msg("  wide flicker %lums: not counted\r\n", (unsigned long)(now - state_t0));
             auto_enter(AS_FOLLOW, now);
         }
+#if AIROST_MODE
+        else if (airost_phase == AIROST_ON_BALL_BRANCH) {
+            log_msg("  branch wobble %lums: not T-bar\r\n", (unsigned long)(now - state_t0));
+            auto_enter(AS_FOLLOW, now);
+        }
+#endif
         else start_junction_action(now);         /* short wide area = junction */
         return;
 
@@ -1014,6 +1067,8 @@ static void auto_start(uint32_t now)
     ramp_t0 = now; ramp_on = (ramp_ms > 0);
     last_error = error = 0;
 #if AIROST_MODE
+    right_turn_ms = 0;
+    if (airost_right_corners == 0) last_right_corner_t = now - RIGHT_CORNER_GAP_MS;
     servo_set(SERVO_OPEN_US);
 #else
     servo_set(SERVO_AUTO_US);
