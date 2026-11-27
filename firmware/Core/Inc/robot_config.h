@@ -132,6 +132,15 @@
 #define SERVO_CLOSED_US      1700
 #define SERVO_AUTO_US        SERVO_CLOSED_US /* position during Stage 1 (gate closed to push the cube) */
 #define SERVO_STEP_US          15  /* moves at most this much every 10 ms: no "dangerous servo movement" */
+#ifndef SERVO_IDLE_OFF_MS
+#if AIROST_MODE
+#define SERVO_IDLE_OFF_MS     400  /* stop PWM pulses (CCR=0) this long after the servo reaches its target:
+                                      prevents continuous stall current from browning out the 5 V rail / Bluetooth.
+                                      0 = keep holding PWM on continuously. */
+#else
+#define SERVO_IDLE_OFF_MS       0  /* legacy Autocar mode: keep PWM holding the heavy cube */
+#endif
+#endif
 
 /* ---------------- MANUAL MODE (Bluetooth, USART3 9600) ----------------
  * Dabble app (iPhone/Android) gamepad: joystick or arrows drive, TRIANGLE close gate, CROSS open,

@@ -531,6 +531,15 @@ int main(void)
     CHECK(left() < 0 && right() < 0, "Dabble joystick drives immediately after auto-MANUAL handoff");
     pad(0x02, 0x00, 0x00); run(10); /* release joystick */
     CHECK(left() == 0 && right() == 0, "Dabble release stops motors");
+    /* Servo auto-relax after SERVO_IDLE_OFF_MS (prevents 5 V / Bluetooth brown-out from stall current) */
+    run(SERVO_IDLE_OFF_MS + 40);
+    CHECK(htim3.ccr[4] == 0, "servo cuts PWM (CCR=0) after SERVO_IDLE_OFF_MS to prevent 5V/BT brown-out");
+    /* Waking up to OPEN ramps smoothly from CLOSED instead of jumping */
+    pad(0x02, 0x10, 0x00); run(120); /* CROSS: open gate */
+    CHECK(htim3.ccr[4] > SERVO_OPEN_US && htim3.ccr[4] < SERVO_CLOSED_US,
+          "re-opening servo after idle-off wakes smoothly from last position (no spike jump)");
+    pad(0x02, 0x04, 0x00); run(600); /* re-close so multi-run reset test below still sees CLOSED -> OPEN */
+    pad(0x02, 0x00, 0x00); run(10);
 
     /* MANUAL 'T' command runs the same timed 90 deg left spin (not cut off by BT_TIMEOUT_MS) */
     clear_logs();

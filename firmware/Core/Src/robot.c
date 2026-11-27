@@ -165,6 +165,9 @@
 #ifndef BALL_PULSE_MAX_MS
 #define BALL_PULSE_MAX_MS     0
 #endif
+#ifndef SERVO_IDLE_OFF_MS
+#define SERVO_IDLE_OFF_MS   400
+#endif
 
 extern TIM_HandleTypeDef htim2;   /* motor PWM: CH1 = A0, CH4 = A3 */
 extern TIM_HandleTypeDef htim3;   /* servo PWM: CH4 = B1           */
@@ -251,8 +254,10 @@ static int      speed_l, speed_r;
 
 /* servo */
 static uint8_t  servo_on;
+static uint8_t  servo_active;        /* 1 = PWM pulses active, 0 = relaxed (CCR=0) after SERVO_IDLE_OFF_MS */
 static int      servo_now = SERVO_OPEN_US, servo_target = SERVO_OPEN_US;
 static uint32_t servo_t;
+static uint32_t servo_done_t;        /* tick when servo_now reached servo_target (0 = still moving) */
 
 /* bluetooth */
 static uint8_t  bt_byte;
@@ -333,12 +338,18 @@ static int clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v)
 static uint8_t           tx_buf[512];
 static volatile uint16_t tx_head, tx_tail, tx_len;
 static volatile uint8_t  tx_busy;
+static uint32_t          tx_busy_t;
 
 static void bt_kick(void)
 {
-    if (tx_busy || tx_head == tx_tail) return;
+    if (tx_busy) {
+        /* Watchdog: if a UART glitch drops a TX complete interrupt, recover instead of wedging BT */
+        if (HAL_GetTick() - tx_busy_t < 500) return;
+        tx_busy = 0;
+    }
+    if (tx_head == tx_tail) return;
     uint16_t len = (tx_head > tx_tail) ? (uint16_t)(tx_head - tx_tail) : (uint16_t)(sizeof tx_buf - tx_tail);
-    tx_busy = 1; tx_len = len;
+    tx_busy = 1; tx_len = len; tx_busy_t = HAL_GetTick();
     if (HAL_UART_Transmit_IT(&huart3, &tx_buf[tx_tail], len) != HAL_OK) tx_busy = 0;
 }
 
@@ -433,26 +444,48 @@ static void brake(void)
 static void stop_motors(void) { drive(0, 0); }
 
 /* ------------------------------------------------------------------ */
-/*  Servo (smooth movement)                                           */
+/*  Servo (smooth movement + auto-relax to prevent 5 V brown-out)     */
 /* ------------------------------------------------------------------ */
 static void servo_set(int us)
 {
     servo_target = clamp(us, 500, 2500);
+    servo_done_t = 0;
     if (!servo_on) {                       /* first use: start the signal */
+#if !AIROST_MODE
         servo_now = servo_target;
+#endif
+        /* In AIROST mode servo_now starts at SERVO_OPEN_US so a first-time Close in MANUAL
+         * ramps smoothly instead of slamming full-speed and browning out the 5 V / BT rail. */
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, servo_now);
         HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
         servo_on = 1;
+        servo_active = 1;
+    } else if (!servo_active) {            /* wake up from idle-off at last known position */
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, servo_now);
+        servo_active = 1;
     }
 }
 
 static void servo_update(uint32_t now)
 {
-    if (!servo_on || now - servo_t < 10) return;
+    if (!servo_on || !servo_active || now - servo_t < 10) return;
     servo_t = now;
-    if (servo_now < servo_target) servo_now = clamp(servo_now + SERVO_STEP_US, 0, servo_target);
-    else if (servo_now > servo_target) servo_now = clamp(servo_now - SERVO_STEP_US, servo_target, 3000);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, servo_now);
+    if (servo_now != servo_target) {
+        if (servo_now < servo_target) servo_now = clamp(servo_now + SERVO_STEP_US, 0, servo_target);
+        else                          servo_now = clamp(servo_now - SERVO_STEP_US, servo_target, 3000);
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, servo_now);
+        servo_done_t = 0;
+#if SERVO_IDLE_OFF_MS > 0
+    } else {
+        if (!servo_done_t) servo_done_t = now;
+        else if (now - servo_done_t >= SERVO_IDLE_OFF_MS) {
+            /* Cut PWM pulses (0% duty) once settled so the servo stops drawing stall current
+             * on the shared 5 V LM7805 rail while keeping servo_now remembered for next move. */
+            __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
+            servo_active = 0;
+        }
+#endif
+    }
 }
 
 /* ------------------------------------------------------------------ */
